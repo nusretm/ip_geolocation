@@ -66,6 +66,28 @@ failed listener bind must never permanently disable the service.
 - User live Windows elevation smoke for install/start/stop and ideally
   reboot/auto-start proof before PR merge.
 
+## R4 automated verification — 2026-10-19
+
+- CI push and pull request on `dc8f89d` succeeded on Windows and Ubuntu:
+  `cargo check --locked --workspace`, **27/27 tests** each platform and
+  existing R1–R3C secured REST/real DB-IP smoke preserved.
+- Windows GitHub-hosted runner performed **actual SCM service installation**
+  under LocalService, verified automatic recovery configuration using
+  `sc.exe qfailure`, issued Start, authenticated REST lookup, Stop,
+  and Uninstall. It then held port `19002` before a second service start:
+  SCM remained `START_PENDING`; after the port was released the
+  **same service process** recovered and reported `RUNNING` with
+  functioning HTTP. The service log recorded the TCP bind retry.
+- Port retry and cancellation have dedicated asynchronous tests; CLI
+  `service install` and `service run` command hierarchy has regression
+  coverage.
+- Follow-up safeguard: service registers with SCM before initializing log
+  output, so failed log creation/ACL results in nonzero `STOPPED` report,
+  allowing the configured SCM recovery policy to operate.
+- A Windows machine's actual **reboot / automatic startup** is not proved
+  by hosted CI. Local user live verification is required before merge.
+- PR #6 remains draft; no merge without explicit user approval.
+
 ## Risks / constraints
 
 - A configured `127.0.0.1` listener usually does not need an external NIC or

@@ -202,11 +202,19 @@ server**. If a separate CLI instance downloads new data, the running server
 detects it on its next `poll_minutes` interval. Corrupt or incompatible
 files cannot replace valid active readers. City/Country/ASN are independent.
 
-Provider priority is **MaxMind first, DB-IP fills missing fields**. Existing
-MaxMind fields are not overwritten. ASN number and organization are never
-combined if their ASN numbers disagree. The existing REST fields remain the
-same; `sources.location` and `sources.asn` may be `dbip` or
-`maxmind+dbip` when DB-IP contributes data.
+Provider priority is **MaxMind first when both providers have the same
+location detail**. GeoIP city-level attributes are treated as one coherent
+record: `city`, `region`, `postal_code`, `latitude`, `longitude` and
+`time_zone` are all selected from **one** provider. When MaxMind provides
+only broad country-level coordinates but DB-IP has a specific city, the entire
+location-detail record switches to DB-IP (including nullable fields); MaxMind
+coordinates and time zone are **not** appended to DB-IP's city. Country code
+and country name may be completed separately only when countries agree.
+ASN number and organization remain independent, and must not be combined
+when the ASN numbers disagree. The REST JSON shape is unchanged;
+`sources.location` and `sources.asn` may be `dbip` or `maxmind+dbip`
+when DB-IP contributes data. A missing time zone is preferable to a
+contradictory time zone from an unrelated provider location record.
 
 ### DB-IP data attribution (required)
 

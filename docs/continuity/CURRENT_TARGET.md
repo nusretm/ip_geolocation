@@ -88,6 +88,25 @@ failed listener bind must never permanently disable the service.
   by hosted CI. Local user live verification is required before merge.
 - PR #6 remains draft; no merge without explicit user approval.
 
+## Integration checkpoint — R3C GeoIP coherence fix
+
+- Standalone user-approved GeoIP correction PR #7 was squash-merged to
+  `main` at `09e79835e636841e8c168efada70c098245e40ed`.
+- The exact `rust/src/geoip/mod.rs` implementation from merged main has
+  been carried forward into this R4 feature branch without modifying
+  Windows SCM/service runtime implementation. Five focused regression tests
+  added by PR #7 stay present, alongside the R4 SCM tests.
+- Real user Windows check in isolated worktree: `cargo check` passed,
+  **29/29 unit tests** passed, and authenticated `8.8.8.8` lookup produced
+  Mountain View, California, `37.422,-122.085`, `time_zone=null`,
+  `asn.number=15169`, `sources.location=maxmind+dbip`.
+- R4 local Windows Service `service stop` was also verified:
+  `Running`, PID `23468` -> `Stopped`, PID none, exit `Win32(0)`.
+- Next gate: R4 cross-platform CI with combined changes and installed
+  Windows Service smoke; then user live R4 branch run after rebuilding the
+  registered executable, followed by user merge approval for PR #6.
+  Automatic startup after an actual Windows reboot remains unverified.
+
 ## Risks / constraints
 
 - A configured `127.0.0.1` listener usually does not need an external NIC or

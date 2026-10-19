@@ -28,6 +28,15 @@ enum ServiceCommand {
     Run,
 }
 
+#[derive(Debug, Clone, Subcommand)]
+enum CliCommand {
+    /// Native Windows Service administration and runtime.
+    Service {
+        #[command(subcommand)]
+        action: ServiceCommand,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "remvibe-geolocation", version, about = "Private GeoLocation HTTP service")]
 struct Cli {
@@ -35,7 +44,7 @@ struct Cli {
     config: PathBuf,
 
     #[command(subcommand)]
-    service: Option<ServiceCommand>,
+    command: Option<CliCommand>,
 
     #[arg(long = "api-key", visible_alias = "new-api-key", conflicts_with_all = ["delete_api_key", "api_key_list"])]
     api_key: bool,
@@ -59,7 +68,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Some(action) = cli.service.as_ref() {
+    if let Some(CliCommand::Service { action }) = cli.command.as_ref() {
         #[cfg(windows)]
         {
             return match action {

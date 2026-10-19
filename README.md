@@ -155,3 +155,71 @@ change. Test with:
 Invoke-RestMethod -Uri "http://localhost:19000/v1/geoip?ip=88.226.122.192" -Headers @{ "X-API-Key" = $apiKey }
 ```
 
+
+
+## R3C — DB-IP Lite provider (optional)
+
+DB-IP [Country](https://db-ip.com/db/download/ip-to-country-lite),
+[City](https://db-ip.com/db/download/ip-to-city-lite) and
+[ASN](https://db-ip.com/db/download/ip-to-asn-lite) MMDB Lite editions are
+published **monthly**. The DB-IP provider uses the shared validated MMDB
+reader and live reader slots but has its **own** gzip download, monthly release
+selection, state file and scheduler. No MaxMind credentials are sent to DB-IP.
+The compressed downloads use the official template
+`https://download.db-ip.com/free/dbip-{country|city|asn}-lite-YYYY-MM.mmdb.gz`
+and are only fetched over HTTPS from that exact host. A missing current month
+causes the updater to consider the previous month, never to downgrade an
+already installed newer release. It checks at most every `check_hours` when
+running automatically and reuses the locally installed database.
+
+For example, keep your existing MaxMind configuration and append:
+
+```toml
+[providers.dbip]
+city = "data/databases/dbip-city-lite.mmdb"
+country = "data/databases/dbip-country-lite.mmdb"
+asn = "data/databases/dbip-asn-lite.mmdb"
+
+[providers.dbip.updates]
+enabled = true
+check_on_start = true
+poll_minutes = 60
+check_hours = 24
+state_file = "data/updates/dbip.json"
+```
+
+For manual download/update without starting the server:
+
+```powershell
+cargo run --locked -- --check-dbip-updates
+```
+
+This operation is distinct from the MaxMind `--check-updates` command.
+When you first start the server with DB-IP updates enabled, missing configured
+DB-IP databases are bootstrapped before requests. New monthly MMDBs are
+validated in a staging file and activated in memory **without restarting the
+server**. If a separate CLI instance downloads new data, the running server
+detects it on its next `poll_minutes` interval. Corrupt or incompatible
+files cannot replace valid active readers. City/Country/ASN are independent.
+
+Provider priority is **MaxMind first, DB-IP fills missing fields**. Existing
+MaxMind fields are not overwritten. ASN number and organization are never
+combined if their ASN numbers disagree. The existing REST fields remain the
+same; `sources.location` and `sources.asn` may be `dbip` or
+`maxmind+dbip` when DB-IP contributes data.
+
+### DB-IP data attribution (required)
+
+DB-IP Lite data is distributed under **Creative Commons Attribution 4.0**.
+If your application displays or uses DB-IP results, give credit and a link to
+[DB-IP](https://db-ip.com) in the consuming UI (for web apps, on pages that use
+these results). The REST endpoint includes `sources` markers and sends an
+`X-Data-Attribution: IP Geolocation by DB-IP; https://db-ip.com; CC BY 4.0`
+header when DB-IP contributes data; the authenticated
+`GET /v1/attribution` endpoint supplies the credit URL and license URL.
+API clients must preserve the attribution in their own presentation.
+For full terms see [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The new DB-IP functionality is optional; existing MaxMind-only config and
+CLI commands continue to work. Databases are approximations of IP geolocation,
+and the Lite datasets have lower accuracy than DB-IP commercial editions.

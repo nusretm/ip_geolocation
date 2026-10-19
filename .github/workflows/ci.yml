@@ -94,3 +94,64 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Real DB-IP Lite country and ASN HTTPS / MMDB smoke
+        shell: pwsh
+        run: |
+          $exe = if ($IsWindows) { "./target/debug/remvibe-geolocation.exe" } else { "./target/debug/remvibe-geolocation" }
+          $work = Join-Path $env:RUNNER_TEMP "dbip-lite-real-smoke"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $config = Join-Path $work "config.toml"
+          @'
+          [server]
+          host = "127.0.0.1"
+          port = 19001
+          [security]
+          trusted_ips = ["127.0.0.1/32", "::1/128"]
+          api_keys_file = "api_keys.json"
+          [providers.dbip]
+          country = "country.mmdb"
+          asn = "asn.mmdb"
+          [providers.dbip.updates]
+          enabled = false
+          check_on_start = false
+          state_file = "dbip-updates.json"
+          '@ | Set-Content -Path $config
+
+          # The CLI downloads actual monthly DB-IP MMDB.gz files, verifies
+          # metadata, extracts and atomically installs them. No fake fixture.
+          $output = (& $exe --config $config --check-dbip-updates) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch "DB-IP country: updated" -or $output -notmatch "DB-IP asn: updated") {
+            throw "DB-IP live download failed: $output"
+          }
+
+          $keyOutput = (& $exe --config $config --api-key --api-key-name "DB-IP CI") -join "`n"
+          $match = [regex]::Match($keyOutput, "API Key: (rvg_[a-f0-9]{64})")
+          if (-not $match.Success) { throw "Failed to create DB-IP smoke key" }
+          $key = $match.Groups[1].Value
+          $server = Start-Process -FilePath $exe -ArgumentList @("--config", $config) -PassThru -NoNewWindow
+          try {
+            $result = $null
+            for ($i = 0; $i -lt 60; $i++) {
+              try {
+                $result = Invoke-RestMethod -Uri "http://127.0.0.1:19001/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $key }
+                break
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if ($null -eq $result -or $result.country_code -ne "US" -or $result.sources.location -ne "dbip") {
+              throw "Real DB-IP country lookup failed"
+            }
+            if ($null -eq $result.asn -or $result.asn.number -ne 15169 -or $result.sources.asn -ne "dbip") {
+              throw "Real DB-IP ASN lookup failed: $($result | ConvertTo-Json -Depth 8 -Compress)"
+            }
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:19001/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $key }
+            if ($response.Headers["X-Data-Attribution"] -notmatch "db-ip.com") { throw "Missing DB-IP attribution" }
+            $info = Invoke-RestMethod -Uri "http://127.0.0.1:19001/v1/attribution" -Headers @{ "X-API-Key" = $key }
+            if ($info.dbip.url -ne "https://db-ip.com") { throw "Attribution endpoint failed" }
+            $unauthorized = Invoke-WebRequest -Uri "http://127.0.0.1:19001/v1/attribution" -SkipHttpErrorCheck
+            if ($unauthorized.StatusCode -ne 401) { throw "Attribution endpoint accepted an unauthorized caller" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }

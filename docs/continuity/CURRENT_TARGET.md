@@ -1,63 +1,71 @@
-# Current Target — R3B Live MMDB Activation
+# Current Target — R3C DB-IP Lite Provider Integration
 
 Repository: `nusretm/ip_geolocation` · 2026-10-19
 
-## Confirmed baseline
+## Completed baseline
 
-- R1 PR #1, R2 PR #2, R3A PR #3 merged into `main` (R3A commit `573ddcf`).
-- Local Windows user evidence: actual MaxMind City, Country and ASN downloads,
-  a second metadata check returned all three `up-to-date`, 0 failures.
-- R3B local Windows evidence: authenticated HTTP live-MMDB swap and corrupt-MMDB protection,
-  `cargo test --locked --workspace` **15/15 passed**; local check exposed only
-  test-helper `dead_code` warnings, now limited to test builds.
-- R3B CI Linux/Windows completed 15/15 tests plus secured REST smoke checks on the
-  earlier PR revision. Encoding regression CI is pending after the latest fix.
+- R1 PR #1 secured HTTP and key management; R2 PR #2 MaxMind MMDB; R3A PR #3 automatic MaxMind updater;
+  R3B PR #4 live MMDB reader swapping and UTF-8 headers all merged on `main` at `3af63c9`.
+- Windows local live R3B evidence: correct UTF-8 `Türkiye`, Content-Type `application/json; charset=utf-8`,
+  clean `cargo check --locked --workspace` and 16/16 tests, clean main.
 
-## Approved R3B work
+## User-approved R3C
 
-- Separate independent read slots for City, Country and ASN, shared by the
-  MaxMind provider and its running updater.
-- `ReaderSlot` uses a short `RwLock` to atomically exchange
-  `Arc<Reader<Vec<u8>>>` values. A lookup retains its Arc and decodes without
-  holding any slot lock; in-flight lookups complete from the previous reader.
-- Stream/extract/validate MMDB into a temporary file, eagerly load its reader,
-  atomically persist the MMDB to disk, and then publish the new reader.
-- Failed download, invalid database or failed disk persist never switches the
-  active reader. Reader data is owned in memory; no persistent MMDB file handle.
-- MaxMind updater can be attached to the live reader set on server startup.
-  The external `--check-updates` CLI only writes on disk. The running server
-  detects a newly built database and activates it on the next scheduler poll,
-  even if remote version checks are not due.
-- Keep existing CLI, API-key/TCP IP authentication and HTTP response contract.
-- Test on Windows/Linux with official synthetic MMDB files, including an
-  authenticated running HTTP server, concurrent lookups, successful City reader
-  replacement and rejection of corrupt MMDB.
+- Add optional `[providers.dbip]` City, Country and ASN MMDB paths and independent
+  `[providers.dbip.updates]` configuration. Existing MaxMind settings unchanged.
+- DB-IP Lite publishes monthly and distributes `dbip-{kind}-lite-YYYY-MM.mmdb.gz`:
+  its archive is **gzip**, not MaxMind's tar.gz.
+- Separate DB-IP-only download helper: fixed allowlisted HTTPS domain and free-path pattern,
+  no redirects, no credentials, bounded compressed/uncompressed size, staged MMDB parsing
+  and edition verification, safe atomic destination persist, source fingerprint.
+- Separate DB-IP monthly updater: persistent state, cross-process lock, current month and
+  previous-month availability fallback, interval-based normal polling, no downgrades,
+  disk bootstrap, staged install and shared ReaderSlot hot activation.
+- DB-IP reads DB-IP-compatible Country/City fields and ASN number/organization,
+  with MaxMind first as the preferred provider and DB-IP filling missing fields only.
+- Preserve coherent ASN number/organization by refusing to combine mismatched numbers.
+  Keep `sources.location` and `sources.asn` truthful (`dbip` or `maxmind+dbip`).
+- Document and expose **CC BY 4.0** credit: JSON `GET /v1/attribution` and response
+  `X-Data-Attribution` header if DB-IP contributes data; clients must provide linked
+  DB-IP attribution on views displaying/using DB-IP results.
+- Separate CLI `--check-dbip-updates` while preserving MaxMind `--check-updates`.
+- Windows/Linux CI, official real DB-IP Lite Country gz/download proof and secured REST lookup;
+  actual user Windows smoke before merge.
 
-## HTTP JSON encoding compatibility
+## R3C verified checkpoint — 2026-10-19
 
-- The running Axum REST API marks JSON content type explicitly as
-  `application/json; charset=utf-8` on both successful responses and JSON
-  authentication/error responses; this corrects the `TÃ¼rkiye` display seen
-  in Windows PowerShell 5.1 when UTF-8 JSON is interpreted using Latin-1.
-- Dedicated Unicode serialization and HTTP response-header regression tests
-  protect this behavior; data already remains UTF-8 inside MMDB/serde_json.
+- User's local Windows working tree on R3C feature branch at `4e1e2d0`:
+  `cargo check --locked --workspace` clean, `cargo test --locked --workspace` 24/24 passed.
+- Actual DB-IP HTTPS Lite archives for `city`, `country` and `asn` (2026-10)
+  were downloaded, decompressed, validated and installed with **0 failures**.
+- A second forced check reported all 3 databases `up-to-date` with **0 failures**,
+  proving redundant downloads are avoided.
+- Server started with MaxMind and DB-IP schedulers enabled and all editions were
+  correctly `skipped` within their configured check intervals. Authenticated REST
+  returned complete Turkish geo data with correct UTF-8 `Türkiye` and truthful
+  `sources.location=maxmind`, `sources.asn=maxmind`.
+- CI from the updated branch, run
+  https://github.com/nusretm/ip_geolocation/actions/runs/39298480137:
+  Windows and Ubuntu checks, **24/24 tests**, existing secured REST smoke and real
+  DB-IP Country/ASN Lite HTTP smoke all passed. The strengthened real DB-IP-only
+  request asserted Google `8.8.8.8` ASN 15169 and `sources.asn=dbip`.
+- DB-IP-only Windows HTTP smoke is now proven with `--config data/dbip-only-test.toml`
+  on `127.0.0.1:19001` (no MaxMind reader): the authenticated request for
+  `8.8.8.8` returned Country `United States/US`, City `Mountain View`,
+  Region `California`, coordinates `37.422, -122.085`, ASN `15169`
+  (`Google LLC`), and `sources.location=dbip` / `sources.asn=dbip`.
+  Missing postal code and time zone remained null as expected for DB-IP Lite.
+- The latest PR #5 push and pull-request GitHub Actions checks for `fc656ce`
+  both succeeded on Windows and Linux.
+- PR #5 remains **draft**. No merge without user's explicit approval.
 
-## Operational limits
+## Deferred / constraints
 
-- R3B uses a tiny read/write lock around **Arc pointer assignment**, not
-  a lock-free primitive; no request holds it while decoding the MMDB.
-- External CLI update activation is eventual, bounded by the configured
-  `poll_minutes` scheduler interval (default 60). An explicit CLI run
-  cannot instantly change another running process's in-memory reader.
-- Changing `config.toml` still requires restart; hot reload applies only
-  to database contents, not provider/account configuration.
-- If a file is externally corrupted, a running server keeps its last valid
-  in-memory snapshot, but cold startup with that bad file fails as designed.
-- R3C DB-IP provider, Windows Service/SCM, TLS and management UI are deferred.
-
-## Repository workflow
-
-- Implement on `feature/maxmind-live-reload-r3b` and open PR to main.
-- User approval required before merge, with practical Windows smoke evidence.
-- Keep `Cargo.lock` pinned and do not commit local `config.toml`,
-  private credentials, MMDB files or update-state JSON.
+- DB-IP commercial database, per-request custom provider priorities, provider health dashboards,
+  windows SCM and TLS are out of R3C scope.
+- Keep provider-specific behavior out of generic GeoService and MaxMind helpers.
+- Do not commit secrets, local config.toml, API keys, state JSON or downloaded MMDB.
+- Change only `feature/dbip-lite-provider-r3c`; PR required; no merge before user approval.
+- Official pages: https://db-ip.com/db/download/ip-to-country-lite ,
+  https://db-ip.com/db/download/ip-to-city-lite ,
+  https://db-ip.com/db/download/ip-to-asn-lite

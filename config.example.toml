@@ -34,3 +34,19 @@ poll_minutes = 60             # scheduler wake frequency
 release_check_hours = 4       # publish weekdays (per database)
 other_check_hours = 24        # out-of-schedule checks
 state_file = "data/updates/maxmind.json"
+
+# R3C: DB-IP Lite is an independent optional provider and downloader.
+# Free Lite databases use CC BY 4.0: https://db-ip.com
+# When both providers are enabled, MaxMind is preferred and DB-IP fills
+# missing location/ASN fields. DB-IP paths must not overlap MaxMind paths.
+[providers.dbip]
+# city = "data/databases/dbip-city-lite.mmdb"
+# country = "data/databases/dbip-country-lite.mmdb"
+# asn = "data/databases/dbip-asn-lite.mmdb"
+
+[providers.dbip.updates]
+enabled = false              # set true after enabling at least one path
+check_on_start = true
+poll_minutes = 60           # local file hot-reload and scheduler wake period
+check_hours = 24            # provider monthly URL availability recheck
+state_file = "data/updates/dbip.json"

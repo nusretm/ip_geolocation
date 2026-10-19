@@ -62,6 +62,7 @@ impl Default for SecurityConfig {
 #[serde(default)]
 pub struct GeoConfig {
     pub maxmind: MaxMindConfig,
+    pub dbip: DbIpConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -138,6 +139,37 @@ impl Default for MaxMindUpdateConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct DbIpConfig {
+    pub city: Option<PathBuf>,
+    pub country: Option<PathBuf>,
+    pub asn: Option<PathBuf>,
+    pub updates: DbIpUpdateConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct DbIpUpdateConfig {
+    pub enabled: bool,
+    pub check_on_start: bool,
+    pub poll_minutes: u64,
+    pub check_hours: u64,
+    pub state_file: PathBuf,
+}
+
+impl Default for DbIpUpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            check_on_start: true,
+            poll_minutes: 60,
+            check_hours: 24,
+            state_file: PathBuf::from("data/updates/dbip.json"),
+        }
+    }
+}
+
 fn resolve_path(path: &mut PathBuf, base: &Path) {
     if path.is_relative() {
         *path = base.join(&*path);
@@ -175,6 +207,37 @@ impl Config {
             &mut config.providers.maxmind.asn,
         ].into_iter().flatten() {
             resolve_path(path, base_dir);
+        }
+
+        resolve_path(&mut config.providers.dbip.updates.state_file, base_dir);
+        if config.providers.dbip.updates.poll_minutes == 0 || config.providers.dbip.updates.check_hours == 0 {
+            bail!("DB-IP update intervals must be greater than zero");
+        }
+        for path in [
+            &mut config.providers.dbip.city,
+            &mut config.providers.dbip.country,
+            &mut config.providers.dbip.asn,
+        ].into_iter().flatten() {
+            resolve_path(path, base_dir);
+        }
+
+        // Providers must not write into one another's MMDB destinations.
+        // A shared updater state path would also corrupt release tracking.
+        let mut known_paths = std::collections::HashSet::new();
+        for path in [
+            &config.providers.maxmind.city,
+            &config.providers.maxmind.country,
+            &config.providers.maxmind.asn,
+            &config.providers.dbip.city,
+            &config.providers.dbip.country,
+            &config.providers.dbip.asn,
+        ].into_iter().flatten() {
+            if !known_paths.insert(path) {
+                bail!("Configured provider MMDB paths must be unique");
+            }
+        }
+        if config.providers.maxmind.updates.state_file == config.providers.dbip.updates.state_file {
+            bail!("MaxMind and DB-IP update state files must be different");
         }
 
         if config.server.port == 0 {

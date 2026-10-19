@@ -47,10 +47,19 @@ IP and a valid API key for each REST request. The intended rule is **OR**:
   integration test. Do not add artificial test volume.
 - `docs/WORKING_RULES.md` and README updated to encode the approved
   policy and precautions.
-- Pending: full Windows/Linux CI + live Windows Service smoke with keyless
-  authenticated REST; explicit user approval **before merge**. A service
-  already running an earlier binary does not pick up this change until
-  its binary is rebuilt and restarted.
+- **GitHub Actions verification passed** on R5 code/docs commit
+  `db46b91`: Windows and Ubuntu `cargo check --locked --workspace`,
+  **33/33 tests each**, keyless trusted-peer HTTP and MMDB lookup,
+  real monthly DB-IP Lite HTTPS/MMDB smoke, and a genuine Windows SCM
+  install/start/port-collision recovery/stop/uninstall run **including a
+  keyless trusted-TCP-peer request**:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39333728847 .
+  The earlier R5 CI run on `97086c4` independently passed both OS:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39333500225 .
+- **Pending:** user local running Windows Service smoke after a controlled
+  binary update and restart; explicit user approval **before merge**.
+  A service already running an earlier binary does not pick up this
+  change until its binary is rebuilt and restarted.
 
 ---
 

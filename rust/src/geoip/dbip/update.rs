@@ -186,9 +186,8 @@ impl DbIpUpdater {
                 entry.last_checked_at = Some(unix_now()?);
                 return Ok(UpdateStatus::UpToDate);
             }
-            if !download::release_available(&self.client, target.kind, month).await? {
-                continue;
-            }
+            // One GET both discovers an available release and streams it.
+            // Some mirrors do not support HEAD, so avoid a redundant probe.
             let Some(candidate) = download::download_candidate(&self.client, target.kind, month, &target.path).await? else {
                 continue;
             };

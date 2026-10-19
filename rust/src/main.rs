@@ -153,3 +153,21 @@ async fn async_main(cli: Cli) -> Result<()> {
     info!("Starting RemVibe GeoLocation HTTP foundation");
     server::serve(config).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scm_actions_have_service_command_prefix() {
+        let parsed = Cli::try_parse_from(["geo", "--config", "example.toml", "service", "install"]).unwrap();
+        assert!(matches!(parsed.command, Some(CliCommand::Service { action: ServiceCommand::Install })));
+
+        let parsed = Cli::try_parse_from(["geo", "service", "run", "--config", "example.toml"]).unwrap();
+        assert!(matches!(parsed.command, Some(CliCommand::Service { action: ServiceCommand::Run })));
+
+        assert!(Cli::try_parse_from(["geo", "install"]).is_err());
+        let legacy = Cli::try_parse_from(["geo", "--check-updates"]).unwrap();
+        assert!(legacy.check_updates);
+    }
+}

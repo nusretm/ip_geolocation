@@ -199,7 +199,8 @@ mod tests {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap();
         let first = client.get(&endpoint).header("X-API-Key", &key).send().await.unwrap();
         assert_eq!(first.status(), reqwest::StatusCode::OK);
-        assert_eq!(first.json::<Value>().await.unwrap()["country"], "United Kingdom");
+        let first_body: Value = serde_json::from_str(&first.text().await.unwrap()).unwrap();
+        assert_eq!(first_body["country"], "United Kingdom");
 
         let concurrent_url = endpoint.clone();
         let concurrent_key = key.clone();

@@ -184,6 +184,7 @@ mod tests {
         let geoip = Arc::new(GeoService::load(&config.providers).unwrap());
         let readers = geoip.maxmind_live_readers().unwrap();
         let original_epoch = readers.active_build_epoch(DatabaseKind::City).unwrap();
+        let original_fingerprint = readers.active_fingerprint(DatabaseKind::City).unwrap();
 
         let app = router(AppState {
             trusted_networks: Arc::new(config.security.trusted_networks().unwrap()),
@@ -229,7 +230,10 @@ mod tests {
         // scheduler at the next local poll: no process restart is required.
         assert!(readers.reload_if_changed(DatabaseKind::City, &city_path).unwrap());
         let changed_epoch = readers.active_build_epoch(DatabaseKind::City).unwrap();
-        assert_ne!(original_epoch, changed_epoch);
+        let changed_fingerprint = readers.active_fingerprint(DatabaseKind::City).unwrap();
+        assert_ne!(original_fingerprint, changed_fingerprint);
+        // Distinct MMDB fixtures may deliberately have identical build epochs.
+        assert!(original_epoch > 0 && changed_epoch > 0);
 
         let mut damaged = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
         damaged.write_all(b"invalid MMDB content").unwrap();
@@ -237,6 +241,7 @@ mod tests {
         damaged.persist(&city_path).unwrap();
         assert!(readers.reload_if_changed(DatabaseKind::City, &city_path).is_err());
         assert_eq!(readers.active_build_epoch(DatabaseKind::City), Some(changed_epoch));
+        assert_eq!(readers.active_fingerprint(DatabaseKind::City), Some(changed_fingerprint));
 
         requests.await.unwrap();
         let last = client.get(&endpoint).header("X-API-Key", &key).send().await.unwrap();

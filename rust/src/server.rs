@@ -1,8 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{ConnectInfo, Query, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -10,19 +10,43 @@ use axum::{
     Json, Router,
 };
 use ipnet::IpNet;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::{config::Config, security};
+use crate::{config::Config, geoip::GeoService, security};
 
 #[derive(Clone)]
 struct AppState {
     trusted_networks: Arc<Vec<IpNet>>,
     key_file: std::path::PathBuf,
+    geoip: Arc<GeoService>,
 }
 
 async fn hello() -> Json<Value> {
     Json(json!({"service": "remvibe-geolocation", "status": "ok"}))
+}
+
+#[derive(Debug, Deserialize)]
+struct GeoQuery {
+    ip: String,
+}
+
+async fn lookup_geoip(State(state): State<AppState>, Query(query): Query<GeoQuery>) -> Response {
+    let Ok(ip) = query.ip.parse::<IpAddr>() else {
+        return deny(StatusCode::BAD_REQUEST, "invalid_ip");
+    };
+    if !state.geoip.has_providers() {
+        return deny(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable");
+    }
+    match state.geoip.lookup(ip) {
+        Ok(Some(location)) => Json(serde_json::to_value(location).unwrap_or(Value::Null)).into_response(),
+        Ok(None) => deny(StatusCode::NOT_FOUND, "ip_not_found"),
+        Err(error) => {
+            warn!(error = %error, "IP lookup failed");
+            deny(StatusCode::INTERNAL_SERVER_ERROR, "lookup_failed")
+        }
+    }
 }
 
 fn deny(code: StatusCode, message: &'static str) -> Response {
@@ -70,9 +94,11 @@ async fn authorize(
 
 pub async fn serve(config: Config) -> Result<()> {
     let address = config.socket_addr();
+    let geoip = GeoService::load(&config.providers).context("Could not initialize GeoIP provider")?;
     let state = AppState {
         trusted_networks: Arc::new(config.security.trusted_networks()?),
         key_file: config.security.api_keys_file,
+        geoip: Arc::new(geoip),
     };
 
     if !address.ip().is_loopback() {
@@ -82,6 +108,7 @@ pub async fn serve(config: Config) -> Result<()> {
     let app = Router::new()
         .route("/", get(hello))
         .route("/v1/health", get(hello))
+        .route("/v1/geoip", get(lookup_geoip))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state);
 

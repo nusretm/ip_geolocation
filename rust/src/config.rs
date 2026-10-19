@@ -13,6 +13,7 @@ use serde::Deserialize;
 pub struct Config {
     pub server: ServerConfig,
     pub security: SecurityConfig,
+    pub providers: GeoConfig,
 }
 
 impl Default for Config {
@@ -20,6 +21,7 @@ impl Default for Config {
         Self {
             server: ServerConfig::default(),
             security: SecurityConfig::default(),
+            providers: GeoConfig::default(),
         }
     }
 }
@@ -56,6 +58,26 @@ impl Default for SecurityConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GeoConfig {
+    pub maxmind: MaxMindConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct MaxMindConfig {
+    pub city: Option<PathBuf>,
+    pub country: Option<PathBuf>,
+    pub asn: Option<PathBuf>,
+}
+
+fn resolve_path(path: &mut PathBuf, base: &Path) {
+    if path.is_relative() {
+        *path = base.join(&*path);
+    }
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let mut config = match fs::read_to_string(path) {
@@ -75,9 +97,15 @@ impl Config {
             .parent()
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        if config.security.api_keys_file.is_relative() {
-            config.security.api_keys_file = base_dir.join(&config.security.api_keys_file);
+        resolve_path(&mut config.security.api_keys_file, base_dir);
+        for path in [
+            &mut config.providers.maxmind.city,
+            &mut config.providers.maxmind.country,
+            &mut config.providers.maxmind.asn,
+        ].into_iter().flatten() {
+            resolve_path(path, base_dir);
         }
+
         if config.server.port == 0 {
             bail!("Server port must not be zero");
         }

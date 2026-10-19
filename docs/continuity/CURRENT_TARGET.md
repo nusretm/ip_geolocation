@@ -1,30 +1,37 @@
-# Current Target — REST API Security Foundation
+# Current Target — R2 MaxMind MMDB + Application-Labeled API Keys
 
 Repository: `nusretm/ip_geolocation`
 
-## Approved scope (2026-10-19)
+Date: 2026-10-19
 
-First implement an Axum Rust server at `http://localhost:19000` that returns a small JSON response, checks the real TCP peer IP against configurable trusted IPv4/IPv6 addresses or CIDRs, and verifies an API key sent via `X-API-Key`. Provide CLI commands `--new-api-key` and `--delete-api-key <API_KEY>`, storing hashes rather than secrets. Keep key changes effective without a restart. Keep the repository deployable on Windows, with explicit Windows Service integration deferred.
+## Current branches
 
-## Checkpoint target
+- R1: `feature/rest-api-security-foundation`, PR #1, not merged without user approval.
+- R2: `feature/maxmind-mmdb-named-api-keys`, created from R1 branch; PR targets R1 until R1 is approved/merged.
 
-- `GET /` and `GET /v1/health` return `{"service":"remvibe-geolocation","status":"ok"}` with valid access.
-- Non-trusted peer: 403; missing or bad key: 401; broken key file: 503.
-- Default listen: 127.0.0.1:19000, not exposed to public internet.
-- Example config, CLI commands, focused tests, CI on Windows/Linux.
+## Approved scope
 
-## Deferred
+Implement the next MMDB checkpoint together with app-specific API key administration:
 
-- MMDB lookup, MaxMind and DB-IP provider registry, per-database update scheduling, automatic downloads.
-- Windows SCM integration, server production deployment/TLS termination, Linux daemon.
-- FFI and web management UI (not required).
+- Rust maxminddb reader for configurable local City, Country and ASN files; no download yet.
+- `GET /v1/geoip?ip=...` with IPv4 and IPv6 parsing and common JSON result model.
+- Keep `GET /` and `GET /v1/health` and mandatory trusted IP/API key middleware.
+- `--api-key --api-key-name "MTN Launcher"` creates a named key, with `--new-api-key` preserved as an alias.
+- `--api-key-list` lists application names, key identifiers and created-at Unix timestamps, never raw keys.
+- `--delete-api-key <API_KEY>` revokes the key.
+- Transparent v1 key store read and migration to v2 on write. Legacy keys remain valid.
 
-## Validation
+## Design boundaries
 
-Run `cargo check --workspace` and `cargo test --workspace` on a Rust-enabled machine. Exercise the secured HTTP endpoint locally. Do not claim runtime verification without observed results.
+- Provider-specific MMDB code in `geoip/maxmind.rs`. Other providers must not be embedded in MaxMind conditionals.
+- Common `GeoProviderAbs` interface and `GeoService` registry prepared for new providers.
+- No provider update scheduling, download/authentication, or external distribution until their checkpoint.
+- Databases are loaded on startup and queried offline. Missing configured files fail startup.
+- Windows Service/SCM and production HTTPS are deferred. Console HTTP binds localhost by default.
+- API keys persist in `data/api_keys.json` with SHA-256 hashes. Runtime writes update the server on the next request.
 
-## Architecture principles
+## Evidence / closing tasks
 
-- Private single-operator service, no user accounts/RBAC/SaaS features.
-- Provider-specific download, update schedule and parser components stay isolated.
-- REST interface and provider core remain separable.
+- Cargo check + focused tests and actual HTTP response with official MaxMind test MMDB on Windows and Linux CI.
+- User local Windows testing for first-hand evidence.
+- Merge only after explicit user approval.

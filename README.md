@@ -37,22 +37,40 @@ For quick tests using **synthetic example data**, MaxMind publishes official [Ge
 
 ## REST usage
 
-API endpoints require both a trusted source IP and a valid `X-API-Key`:
+REST requests are authorized by **either a configured trusted TCP source IP
+or a valid `X-API-Key`**. Trusted IPs/CIDRs bypass API key verification;
+an untrusted peer needs a valid key. Both paths apply to all REST routes:
 
 ```powershell
+# A trusted local TCP peer (127.0.0.1 by default) needs NO API key:
+Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/health"
+Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/geoip?ip=8.8.8.8"
+
+# An IP not on the allowlist MUST send a valid API key:
 $apiKey = "YOUR_GENERATED_KEY"
-Invoke-RestMethod -Uri "http://localhost:19000/v1/health" -Headers @{ "X-API-Key" = $apiKey }
-Invoke-RestMethod -Uri "http://localhost:19000/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $apiKey }
+Invoke-RestMethod -Uri "http://SERVER_HOST:19000/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $apiKey }
 ```
+
+| Actual TCP source IP | API key | Authorization |
+| --- | --- | --- |
+| Trusted | None, invalid or valid | Allowed |
+| Untrusted | Valid | Allowed |
+| Untrusted | None or invalid | 401 Unauthorized |
+| Missing TCP peer metadata | Any | 403 Forbidden |
+
+The trusted IP/CIDR list still must be nonempty. Key revocation affects
+**untrusted** IPs using that key; allowlisted IPs remain allowed even
+if they send a revoked key. An unreadable/invalid key store fails closed
+for nontrusted peers (503), while IP-trusted requests continue working.
 
 - `GET /` and `GET /v1/health`: JSON status
 - `GET /v1/geoip?ip=<IPv4-or-IPv6>`: GeoIP and ASN data
 - Unknown IP: 404, invalid IP: 400, missing database: 503
-- Invalid/missing key: 401; untrusted peer: 403
+- Untrusted TCP peer with missing/invalid key: 401; missing TCP peer metadata: 403
 
 Result fields include `country_code`, `country`, `city`, `region`, `postal_code`, `latitude`, `longitude`, `time_zone`, `asn` and `sources`. Any field unavailable in the database is `null`.
 
-The default listener is **127.0.0.1:19000**, and trusted peers default to loopback IPv4/IPv6. IP checks use the real TCP peer and never trust forwarded request headers. **HTTP is for local testing only**. Do not expose this service outside a trusted machine until TLS termination and firewall rules are configured. Keep key data and downloaded MMDB files out of Git and protect the runtime directory with appropriate filesystem ACLs.
+The default listener is **127.0.0.1:19000**, and trusted peers default to loopback IPv4/IPv6. The allowlist uses the **real TCP peer** (including IPv4-mapped IPv6 normalization), never client-supplied `X-Forwarded-For` or `X-Real-IP` headers. A trusted proxy's immediate TCP address is what is checked; do not accidentally allowlist a publicly accessible proxy, as doing so would grant keyless access to everyone who can reach it. **Plain HTTP is for local testing only**. To expose this service to remote API-key clients, configure a non-loopback bind, a restrictive firewall, and trusted TLS termination that protects API keys on the wire. Keep keys and downloaded MMDB files out of Git and protect the runtime directory with appropriate filesystem ACLs.
 
 ## Verification
 
@@ -254,8 +272,10 @@ $config = "C:\\Services\\RemVibeGeoLocation\\config.toml"
 & $exe service start
 & $exe service status
 
-# Uses normal X-API-Key / trusted-client-IP authentication:
-Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $apiKey }
+# Local trusted TCP peer: no API key needed.
+Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/geoip?ip=8.8.8.8"
+# From a non-allowlisted TCP peer: supply X-API-Key via protected HTTPS.
+# (Requires appropriate non-loopback listener, firewall and TLS termination.)
 
 & $exe service stop
 & $exe service uninstall

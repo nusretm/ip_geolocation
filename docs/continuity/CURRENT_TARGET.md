@@ -1,6 +1,79 @@
-# R4 — Windows Service, startup readiness and recovery
+# R5 — Trusted TCP IP OR API Key access control
 
-Repository: `nusretm/ip_geolocation` · 2026-10-19
+Repository: `nusretm/ip_geolocation` · 2026-10-20
+
+## User-approved R5 scope
+
+The original R1 policy accidentally required **both** a trusted TCP source
+IP and a valid API key for each REST request. The intended rule is **OR**:
+
+- Trusted real TCP peer IP/CIDR -> allow REST access **without** an API key.
+  An invalid, revoked or missing `X-API-Key` does not negate TCP trust.
+- Otherwise -> a **valid** API key is sufficient, regardless of whether
+  the source IP appears in `security.trusted_ips`.
+- Untrusted peer + missing/invalid/revoked key -> 401 Unauthorized.
+  Key-store errors reject untrusted peers with 503. Trusted TCP peers do
+  not depend on the key store's availability.
+- Missing TCP connection metadata -> 403 Forbidden, even if the supplied
+  API key is valid. Only the direct socket peer is trusted; ignore
+  `X-Forwarded-For` and `X-Real-IP` for authorization.
+- The configured trusted list stays explicit and non-empty. Existing
+  `config.toml`, key file format, REST routes and response schema
+  are unchanged. Default `127.0.0.1:19000` listener remains loopback.
+- Remote API-key clients need explicitly configured network binding,
+  restrictive firewall and trusted HTTPS/TLS transport. A broad trusted
+  IP/CIDR or a trusted reverse proxy can unintentionally allow anonymous
+  clients. Do not broaden these by default.
+
+## R5 implementation checkpoint
+
+- Branch: `feature/r5-trusted-ip-or-api-key` from merged R4 main
+  `0c2f8c9`. Main and the installed Windows Service are not modified
+  until separately approved.
+- `rust/src/server.rs`: trusted TCP peers pass the middleware immediately;
+  other peers are authenticated with the existing stored hashed API keys.
+  No changes to MMDB lookup, providers, updater, SCM runtime or service
+  installer.
+- Focused actual-TCP integration test: two localhost listeners with
+  opposite allowlists verify that source-IP trust and key authorization
+  are independent; includes invalid/missing key, spoofed forwarding
+  headers, accepted non-trusted valid key, revocation and corrupt key
+  store. Existing MMDB hot-reload assertion now reflects trusted
+  loopback's expected keyless access.
+- `.github/workflows/ci.yml`: Windows and Linux secured API/MMDB smoke
+  now checks trusted keyless/invalid-key requests; DB-IP attribution
+  check is keyless; Windows native SCM smoke also exercises a keyless
+  trusted HTTP request. Untrusted-key cases stay in the actual TCP
+  integration test. Do not add artificial test volume.
+- `docs/WORKING_RULES.md` and README updated to encode the approved
+  policy and precautions.
+- **GitHub Actions verification passed** on R5 code/docs commit
+  `db46b91`: Windows and Ubuntu `cargo check --locked --workspace`,
+  **33/33 tests each**, keyless trusted-peer HTTP and MMDB lookup,
+  real monthly DB-IP Lite HTTPS/MMDB smoke, and a genuine Windows SCM
+  install/start/port-collision recovery/stop/uninstall run **including a
+  keyless trusted-TCP-peer request**:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39333728847 .
+  The earlier R5 CI run on `97086c4` independently passed both OS:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39333500225 .
+- **Cloud server deployment confirmed by user (2026-10-20):**
+  built R5 with `cargo build --release`, installed the release binary
+  as a Windows Service on their cloud server and reported that it works
+  in live use. The user did not supply individual HTTP responses or
+  logs for each authorization branch; those specific cases are covered
+  by the integration tests and CI, not claimed as independently observed
+  in this cloud deployment.
+- Latest pre-deployment PR head `4c5c8dc` had **successful** Windows
+  and Ubuntu CI for push and PR, including native SCM and keyless trusted
+  API smoke:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39334061515
+  and https://github.com/nusretm/ip_geolocation/actions/runs/39334055149 .
+- **Pending:** explicit user approval before PR #8 merge. R5 is deployed
+  independently on the cloud server but `main` is unchanged.
+
+---
+
+## R4 historical handoff (merged as PR #6 / `0c2f8c9`)
 
 ## Approved goal
 

@@ -53,11 +53,6 @@ async fn request(client: &Client, method: Method, url: &Url) -> Result<Option<Re
     Ok(Some(response))
 }
 
-pub async fn release_available(client: &Client, kind: DatabaseKind, month: &str) -> Result<bool> {
-    let url = download_url(kind, month)?;
-    Ok(request(client, Method::HEAD, &url).await?.is_some())
-}
-
 pub struct DatabaseCandidate {
     file: NamedTempFile,
     reader: Reader<Vec<u8>>,

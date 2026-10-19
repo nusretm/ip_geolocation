@@ -77,7 +77,7 @@ fn extract_gzip(source: &Path, destination: &Path, kind: DatabaseKind) -> Result
     let parent = destination.parent().context("DB-IP target needs a parent directory")?;
     let mut temp = NamedTempFile::new_in(parent).context("Cannot create staging DB-IP MMDB")?;
     let mut decoder = GzDecoder::new(File::open(source).context("Cannot open DB-IP download")?);
-    let count = std::io::copy(&mut decoder.by_ref().take(MAX_MMDB_BYTES + 1), &mut temp)
+    let count = std::io::copy(&mut std::io::Read::by_ref(&mut decoder).take(MAX_MMDB_BYTES + 1), &mut temp)
         .context("Invalid DB-IP gzip archive")?;
     if count == 0 || count > MAX_MMDB_BYTES {
         bail!("Decompressed DB-IP MMDB is empty or exceeds the configured safety limit");

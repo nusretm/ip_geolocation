@@ -1,6 +1,60 @@
-# R4 — Windows Service, startup readiness and recovery
+# R5 — Trusted TCP IP OR API Key access control
 
-Repository: `nusretm/ip_geolocation` · 2026-10-19
+Repository: `nusretm/ip_geolocation` · 2026-10-20
+
+## User-approved R5 scope
+
+The original R1 policy accidentally required **both** a trusted TCP source
+IP and a valid API key for each REST request. The intended rule is **OR**:
+
+- Trusted real TCP peer IP/CIDR -> allow REST access **without** an API key.
+  An invalid, revoked or missing `X-API-Key` does not negate TCP trust.
+- Otherwise -> a **valid** API key is sufficient, regardless of whether
+  the source IP appears in `security.trusted_ips`.
+- Untrusted peer + missing/invalid/revoked key -> 401 Unauthorized.
+  Key-store errors reject untrusted peers with 503. Trusted TCP peers do
+  not depend on the key store's availability.
+- Missing TCP connection metadata -> 403 Forbidden, even if the supplied
+  API key is valid. Only the direct socket peer is trusted; ignore
+  `X-Forwarded-For` and `X-Real-IP` for authorization.
+- The configured trusted list stays explicit and non-empty. Existing
+  `config.toml`, key file format, REST routes and response schema
+  are unchanged. Default `127.0.0.1:19000` listener remains loopback.
+- Remote API-key clients need explicitly configured network binding,
+  restrictive firewall and trusted HTTPS/TLS transport. A broad trusted
+  IP/CIDR or a trusted reverse proxy can unintentionally allow anonymous
+  clients. Do not broaden these by default.
+
+## R5 implementation checkpoint
+
+- Branch: `feature/r5-trusted-ip-or-api-key` from merged R4 main
+  `0c2f8c9`. Main and the installed Windows Service are not modified
+  until separately approved.
+- `rust/src/server.rs`: trusted TCP peers pass the middleware immediately;
+  other peers are authenticated with the existing stored hashed API keys.
+  No changes to MMDB lookup, providers, updater, SCM runtime or service
+  installer.
+- Focused actual-TCP integration test: two localhost listeners with
+  opposite allowlists verify that source-IP trust and key authorization
+  are independent; includes invalid/missing key, spoofed forwarding
+  headers, accepted non-trusted valid key, revocation and corrupt key
+  store. Existing MMDB hot-reload assertion now reflects trusted
+  loopback's expected keyless access.
+- `.github/workflows/ci.yml`: Windows and Linux secured API/MMDB smoke
+  now checks trusted keyless/invalid-key requests; DB-IP attribution
+  check is keyless; Windows native SCM smoke also exercises a keyless
+  trusted HTTP request. Untrusted-key cases stay in the actual TCP
+  integration test. Do not add artificial test volume.
+- `docs/WORKING_RULES.md` and README updated to encode the approved
+  policy and precautions.
+- Pending: full Windows/Linux CI + live Windows Service smoke with keyless
+  authenticated REST; explicit user approval **before merge**. A service
+  already running an earlier binary does not pick up this change until
+  its binary is rebuilt and restarted.
+
+---
+
+## R4 historical handoff (merged as PR #6 / `0c2f8c9`)
 
 ## Approved goal
 

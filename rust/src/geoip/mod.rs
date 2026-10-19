@@ -196,7 +196,7 @@ mod merge_tests {
             ..GeoLocation::default()
         };
         let dbip = GeoLocation {
-            ip: "8.8.8.8".into(), country: Some("USA".into()),
+            ip: "8.8.8.8".into(), country_code: Some("US".into()), country: Some("USA".into()),
             city: Some("Mountain View".into()),
             sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
             ..GeoLocation::default()

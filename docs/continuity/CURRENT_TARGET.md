@@ -1,127 +1,183 @@
-# Current Target — R3C DB-IP Lite Provider Integration
+# R4 — Windows Service, startup readiness and recovery
 
 Repository: `nusretm/ip_geolocation` · 2026-10-19
 
-## Completed baseline
+## Approved goal
 
-- R1 PR #1 secured HTTP and key management; R2 PR #2 MaxMind MMDB; R3A PR #3 automatic MaxMind updater;
-  R3B PR #4 live MMDB reader swapping and UTF-8 headers all merged on `main` at `3af63c9`.
-- Windows local live R3B evidence: correct UTF-8 `Türkiye`, Content-Type `application/json; charset=utf-8`,
-  clean `cargo check --locked --workspace` and 16/16 tests, clean main.
+Add a true Windows Service to the existing Rust binary without duplicating the
+MaxMind/DB-IP, API-key security and HTTP layers. Explicit additional user
+requirement: **network/TCP can be unavailable when Windows starts**. A single
+failed listener bind must never permanently disable the service.
 
-## User-approved R3C
+## Previous merged baseline
 
-- Add optional `[providers.dbip]` City, Country and ASN MMDB paths and independent
-  `[providers.dbip.updates]` configuration. Existing MaxMind settings unchanged.
-- DB-IP Lite publishes monthly and distributes `dbip-{kind}-lite-YYYY-MM.mmdb.gz`:
-  its archive is **gzip**, not MaxMind's tar.gz.
-- Separate DB-IP-only download helper: fixed allowlisted HTTPS domain and free-path pattern,
-  no redirects, no credentials, bounded compressed/uncompressed size, staged MMDB parsing
-  and edition verification, safe atomic destination persist, source fingerprint.
-- Separate DB-IP monthly updater: persistent state, cross-process lock, current month and
-  previous-month availability fallback, interval-based normal polling, no downgrades,
-  disk bootstrap, staged install and shared ReaderSlot hot activation.
-- DB-IP reads DB-IP-compatible Country/City fields and ASN number/organization,
-  with MaxMind first as the preferred provider and DB-IP filling missing fields only.
-- Preserve coherent ASN number/organization by refusing to combine mismatched numbers.
-  Keep `sources.location` and `sources.asn` truthful (`dbip` or `maxmind+dbip`).
-- Document and expose **CC BY 4.0** credit: JSON `GET /v1/attribution` and response
-  `X-Data-Attribution` header if DB-IP contributes data; clients must provide linked
-  DB-IP attribution on views displaying/using DB-IP results.
-- Separate CLI `--check-dbip-updates` while preserving MaxMind `--check-updates`.
-- Windows/Linux CI, official real DB-IP Lite Country gz/download proof and secured REST lookup;
-  actual user Windows smoke before merge.
+- R1–R3C on `main`, latest R3C merge `cc46776`.
+- MaxMind + DB-IP independent database updates, live MMDB Arc reader swapping,
+  trusted TCP peer policy + API keys, UTF-8 JSON responses.
+- R3C user evidence: clean `cargo check --locked --workspace`, 24/24 tests,
+  all three monthly DB-IP downloads and no re-download, DB-IP-only real
+  authenticated Country/City/ASN HTTP response from Windows.
 
-## R3C verified checkpoint — 2026-10-19
+## R4 design / implementation
 
-- User's local Windows working tree on R3C feature branch at `4e1e2d0`:
-  `cargo check --locked --workspace` clean, `cargo test --locked --workspace` 24/24 passed.
-- Actual DB-IP HTTPS Lite archives for `city`, `country` and `asn` (2026-10)
-  were downloaded, decompressed, validated and installed with **0 failures**.
-- A second forced check reported all 3 databases `up-to-date` with **0 failures**,
-  proving redundant downloads are avoided.
-- Server started with MaxMind and DB-IP schedulers enabled and all editions were
-  correctly `skipped` within their configured check intervals. Authenticated REST
-  returned complete Turkish geo data with correct UTF-8 `Türkiye` and truthful
-  `sources.location=maxmind`, `sources.asn=maxmind`.
-- CI from the updated branch, run
-  https://github.com/nusretm/ip_geolocation/actions/runs/39298480137:
-  Windows and Ubuntu checks, **24/24 tests**, existing secured REST smoke and real
-  DB-IP Country/ASN Lite HTTP smoke all passed. The strengthened real DB-IP-only
-  request asserted Google `8.8.8.8` ASN 15169 and `sources.asn=dbip`.
-- DB-IP-only Windows HTTP smoke is now proven with `--config data/dbip-only-test.toml`
-  on `127.0.0.1:19001` (no MaxMind reader): the authenticated request for
-  `8.8.8.8` returned Country `United States/US`, City `Mountain View`,
-  Region `California`, coordinates `37.422, -122.085`, ASN `15169`
-  (`Google LLC`), and `sources.location=dbip` / `sources.asn=dbip`.
-  Missing postal code and time zone remained null as expected for DB-IP Lite.
-- The latest PR #5 push and pull-request GitHub Actions checks for `fc656ce`
-  both succeeded on Windows and Linux.
-- Historical at R3C preparation: PR #5 was draft pending approval. PR #5 subsequently merged to main as `cc46776`.
+- `feature/windows-service-r4`, not merged without explicit user approval.
+- `rust/src/windows_service/runtime.rs` owns the Windows SCM lifecycle:
+  `StartPending` checkpoint updates every 8 seconds during initial DB
+  preparation / listener recovery, `Running` only after the TCP listening
+  socket is bound, `StopPending` while draining HTTP, `Stopped` with an
+  explicit success/error exit code. Stop from SCM uses cooperative Tokio watch.
+- `rust/src/windows_service/management.rs` owns SCM install, uninstall,
+  start, stop, status. CLI is `service install|uninstall|start|stop|status`;
+  internal `service run` is called by SCM, not an interactive command.
+- Runs under `NT AUTHORITY\\LocalService`; registers unique service SID,
+  grants only service-specific access to executable, config and default
+  `data/` folder via icacls. Custom writable directories outside `data/`
+  require manual ACL permission; no broad `Users` permissions added.
+- Registers Automatic (Delayed Start) plus SCM failure recovery:
+  restart after 30 seconds, then 60 seconds, then 120 seconds (and subsequent
+  failures use last action). Recovery enabled for non-crash failures too,
+  24-hour failure-counter reset. Explicit service stop is clean and does
+  not trigger recovery.
+- `server::serve_managed` has same HTTP/router/provider implementation for
+  console and service. TCP `bind` retry on address unavailable, network down,
+  network unreachable and port in use with 1s→2s→4s→8s→16s→30s max backoff.
+  Retrying is bounded to 180 seconds: if TCP stays unavailable, startup
+  returns an error (nonzero SCM code) and configured SCM recovery restarts
+  service. This prevents permanent stuck boot and supports outages >3 minutes.
+  Stop signal cancels retry sleep promptly. Socket becoming available allows
+  process to start listening **without a process restart**.
+- Console startup still uses Ctrl+C; provider updater CLI remains unchanged.
+- Logs written to `<config-dir>/data/logs/remvibe-geolocation.log`.
+  Windows Services do not inherit interactive user environment variables.
+  MaxMind credentials must be accessible in the service account context.
+- Windows-specific code and dependency are `cfg(windows)`; CI keeps Linux
+  check and tests intact.
 
-## Follow-up fix — coherent location fallback (2026-10-19)
+## Verification gate
 
-- **User-approved standalone follow-up to R3C**, tracked on
-  `fix/geoip-coherent-location-fallback` with its own PR targeting main.
-  R4 Windows Service branch/PR #6 remains independent and unmerged.
-- User's genuine Windows R4 service HTTP response for `8.8.8.8` returned
-  city `Mountain View` / region `California` from DB-IP while keeping
-  MaxMind's general US coordinates `37.751,-97.822` and
-  `America/Chicago`. `sources.location=maxmind+dbip` accurately signaled
-  two providers but the resulting geographic combination was incoherent.
-- Root cause: R3C `GeoLocation::fill_missing` treated City, Region, Postcode,
-  Latitude, Longitude and Time Zone as independent nullable fields.
-- Fix: treat those **six detailed location fields as a single provider-owned
-  profile**. Prefer MaxMind at equal detail; replace its *whole* detail profile
-  if DB-IP has demonstrably greater specificity (city > region/postcode >
-  full coordinates > partial/time zone > none). Country code and country name
-  can be filled independently **only when geographic countries agree**;
-  reject any cross-provider geographic fallback when the known country
-  codes disagree or DB-IP has no country code but MaxMind does. ASN remains
-  independent and preserves number/organization agreement checks.
-- Full profile replacement clears values unsupported by the newly selected
-  provider: e.g. a DB-IP Mountain View City replaces MaxMind's US centroid
-  coordinate and `America/Chicago` time zone with DB-IP coordinates and a
-  null time zone. This intentionally favors coherent data over superficially
-  filling every JSON field.
-- Added focused regression tests for exact observed `8.8.8.8` mismatch,
-  MaxMind-city preservation when its coordinates are null, countries
-  disagreeing, country-only MaxMind with DB-IP City, and unknown fallback
-  country. Existing maxmind-priority and ASN consistency tests remain.
-- Preserve API schema and authenticated routes; do not modify Windows Service
-  infrastructure or provider updater behavior; no Git secrets/MMDB.
-- CI verified on code commit `08e97ff`: GitHub Actions
-  https://github.com/nusretm/ip_geolocation/actions/runs/39312099907
-  passed `cargo check --locked --workspace`, **29/29 unit tests**,
-  authenticated MMDB HTTP smoke and actual DB-IP Lite Country/ASN downloads
-  and HTTP checks on **both Ubuntu and Windows**.
-- User independently verified Windows R4 SCM Stop on PID `23468`:
-  `Running` → `Stopped`, PID cleared, `Win32(0)`.
-  The installed R4 service is **separate** and must be kept safe while
-  testing this main-derived fix; avoid overwriting its registered
-  `target/debug/remvibe-geolocation.exe`. Use a sibling git worktree for
-  local console testing.
-- Windows local **two-provider** smoke verified on the detached fix
-  worktree at `978ab42`: `cargo check --locked --workspace` clean,
-  `cargo test --locked --workspace` **29/29 passed**. Console server loaded
-  the existing authenticated config on `127.0.0.1:19000`; its live
-  `8.8.8.8` response returned `Mountain View`, `California`,
-  `37.422,-122.085`, `time_zone=null`, `country_code=US`,
-  `asn.number=15169` and `sources.location=maxmind+dbip`.
-  The prior mismatched MaxMind US centroid and Chicago time zone no longer
-  leak into the DB-IP city profile.
-- Latest PR #7 head `978ab42` completed successful GitHub Actions on
-  Windows and Ubuntu: https://github.com/nusretm/ip_geolocation/actions/runs/39312501806 .
-- Pending: explicit user merge approval. Merge the isolated fix into `main`
-  before integrating the merged fix into R4 PR #6.
+- CI `cargo check --locked --workspace` and `cargo test --locked --workspace`
+  on Windows and Ubuntu, including TCP port-collision recovery and cancellation
+  unit tests on both platforms.
+- Windows runner real SCM smoke: install with LocalService and unique service
+  SID, query configured recovery, start, authenticate and query the localhost
+  REST API; stop; hold the target TCP port; start again, observe
+  `START_PENDING`, release port, observe `RUNNING` and HTTP recovery;
+  finally stop/uninstall and verify diagnostics log.
+- User live Windows elevation smoke for install/start/stop, PID-matched
+  HTTP and network/port recovery. Actual reboot/autostart smoke is deferred
+  at the user's request and is not required for R4 merge.
 
-## Deferred / constraints
+## R4 automated verification — 2026-10-19
 
-- DB-IP commercial database, per-request custom provider priorities, provider health dashboards,
-  windows SCM and TLS are out of R3C scope.
-- Keep provider-specific behavior out of generic GeoService and MaxMind helpers.
-- Do not commit secrets, local config.toml, API keys, state JSON or downloaded MMDB.
-- Change only `feature/dbip-lite-provider-r3c`; PR required; no merge before user approval.
-- Official pages: https://db-ip.com/db/download/ip-to-country-lite ,
-  https://db-ip.com/db/download/ip-to-city-lite ,
-  https://db-ip.com/db/download/ip-to-asn-lite
+- CI push and pull request on `dc8f89d` succeeded on Windows and Ubuntu:
+  `cargo check --locked --workspace`, **27/27 tests** each platform and
+  existing R1–R3C secured REST/real DB-IP smoke preserved.
+- Windows GitHub-hosted runner performed **actual SCM service installation**
+  under LocalService, verified automatic recovery configuration using
+  `sc.exe qfailure`, issued Start, authenticated REST lookup, Stop,
+  and Uninstall. It then held port `19002` before a second service start:
+  SCM remained `START_PENDING`; after the port was released the
+  **same service process** recovered and reported `RUNNING` with
+  functioning HTTP. The service log recorded the TCP bind retry.
+- Port retry and cancellation have dedicated asynchronous tests; CLI
+  `service install` and `service run` command hierarchy has regression
+  coverage.
+- Follow-up safeguard: service registers with SCM before initializing log
+  output, so failed log creation/ACL results in nonzero `STOPPED` report,
+  allowing the configured SCM recovery policy to operate.
+- A Windows machine's actual **reboot / automatic startup** is not proved
+  by hosted CI. Local user live verification is required before merge.
+- PR #6 remains draft; no merge without explicit user approval.
+
+## Integration checkpoint — R3C GeoIP coherence fix
+
+- Standalone user-approved GeoIP correction PR #7 was squash-merged to
+  `main` at `09e79835e636841e8c168efada70c098245e40ed`.
+- The exact `rust/src/geoip/mod.rs` implementation from merged main has
+  been carried forward into this R4 feature branch without modifying
+  Windows SCM/service runtime implementation. Five focused regression tests
+  added by PR #7 stay present, alongside the R4 SCM tests.
+- Real user Windows check in isolated worktree: `cargo check` passed,
+  **29/29 unit tests** passed, and authenticated `8.8.8.8` lookup produced
+  Mountain View, California, `37.422,-122.085`, `time_zone=null`,
+  `asn.number=15169`, `sources.location=maxmind+dbip`.
+- R4 local Windows Service `service stop` was also verified:
+  `Running`, PID `23468` -> `Stopped`, PID none, exit `Win32(0)`.
+- **Combined R4 + GeoIP integration CI verified** on commit `0e74fab`:
+  Windows and Ubuntu `cargo check --locked --workspace`, **32/32 tests**
+  each, original authenticated REST/MMDB and real DB-IP smoke, and the
+  actual Windows SCM install/start/stop/uninstall with held TCP port and
+  recovery all passed. Push CI:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39316103458
+  ; PR CI:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39316114736
+  . PR #6 is cleanly mergeable and remains **draft**.
+- Next gate: user live R4 branch verification after rebuilding the registered
+  executable, followed by explicit merge approval for PR #6.
+  Automatic startup after an actual Windows reboot remains unverified.
+
+## User local R4 port conflict and observability fix — 2026-10-19
+
+- User `cargo check --locked --workspace` and `cargo test --locked --workspace`
+  on the updated combined R4 branch passed, **32/32 tests**; build succeeded.
+- A local `service start` returned `StartPending` then `Stopped`,
+  `Win32(1)`. Authenticated HTTP on `127.0.0.1:19000` still returned
+  correct Mountain View/California data, while Windows Service logs
+  showed `os error 10048` (**address already in use**) with retry delays
+  1, 2, 4, 8, 16, 30 seconds. This demonstrates a different process
+  owned the port; likely the user's still-running GeoIP fix worktree
+  console process. The successful HTTP response **does not** demonstrate
+  that the service was serving requests.
+- The SCM recovery loop reattempted startup, as evidenced by fresh log
+  initialization after a failed startup. This situation is a genuine
+  port-ownership conflict, **not** evidence that Windows TCP or the NIC
+  failed to initialize. Inspect the actual `Get-NetTCPConnection` PID
+  and process command line; stop only the confirmed competing console
+  process. Service then needs to reach `Running` with authenticated HTTP.
+- Previously, R4 reported generic `channel closed` when the HTTP
+  readiness sender was dropped after a fatal startup failure. The
+  follow-up fix in `windows_service/runtime.rs` awaits the server task
+  and propagates the **underlying bind error** into SCM logs, avoiding a
+  misleading error; early intentional Stop remains clean.
+- **Windows user live recovery verified**: inspected TCP port `19000` owner
+  PID `14604` and confirmed the process was
+  `D:\\development\\rust\\ip_geolocation_geo_fix\\target\\debug\\remvibe-geolocation.exe`
+  (the separate console test worktree). After the user stopped that known
+  competing process, the port query was empty; SCM automatically recovered
+  the service to `Running` without the user needing to issue Start.
+  The running service PID was `28416`, matching the TCP listener owner
+  PID `28416` at `127.0.0.1:19000`; `sc.exe queryex` confirmed
+  `STATE: RUNNING` and `WIN32_EXIT_CODE: 0`.
+- An authenticated Windows REST query **served by the verified service**
+  returned `8.8.8.8` as Mountain View/California,
+  `37.422,-122.085`, null time zone, Google LLC/ASN 15169 and
+  `sources.location=maxmind+dbip`. The GeoIP coherence fix is
+  verified through the actual Windows Service, not just the console.
+- Latest PR #6 head `354294e` passed both GitHub Actions workflows
+  (Windows and Ubuntu), including native SCM installation and port recovery.
+  CI: https://github.com/nusretm/ip_geolocation/actions/runs/39318023050
+  and https://github.com/nusretm/ip_geolocation/actions/runs/39318016043 .
+- **User acceptance decision:** reboot validation is **deferred**, not a
+  merge blocker. Windows Service is confirmed `Running`, PID `28416`
+  owns `127.0.0.1:19000`, `sc.exe queryex` reports exit code 0, and
+  the real authenticated GeoIP API works. TCP port-conflict recovery
+  and SCM automatic recovery were exercised. No reboot performed;
+  automatic delayed-start after reboot remains **unverified**, and will
+  be investigated if a real future restart exposes a problem.
+- R4 may proceed to merge review on this verified operating baseline,
+  still requiring **explicit user approval before PR #6 merge**.
+
+## Risks / constraints
+
+- A configured `127.0.0.1` listener usually does not need an external NIC or
+  Internet, but a configured non-loopback address can appear later in boot.
+  Delayed Start is preventive only; binding retry + SCM recovery is protection.
+- Running service does not inherit user-specific MaxMind account environment
+  variables. Provide credentials using secure machine/service environment or
+  carefully ACL-protected configuration; never commit secrets.
+- Runtime data under custom directories outside default `data/` need
+  explicit service SID permissions. Avoid installing exe from mutable
+  `target/debug` for permanent production deployment.
+- The initial DB download may take time; SCM checkpoint updates prevent
+  false "hung during startup" interpretation.
+- No source/provider refactoring or UI deployment in R4. No automatic merge.

@@ -155,3 +155,96 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Windows SCM install/start/recover/stop/uninstall smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path "./target/debug/remvibe-geolocation.exe").Path
+          $work = Join-Path $env:RUNNER_TEMP "remvibe-r4-scm"
+          $data = Join-Path $work "data"
+          $databases = Join-Path $data "databases"
+          New-Item -ItemType Directory -Force $databases | Out-Null
+          Copy-Item $env:MAXMIND_TEST_MMDB_PATH (Join-Path $databases "City.mmdb")
+          $config = Join-Path $work "config.toml"
+          @'
+          [server]
+          host = "127.0.0.1"
+          port = 19002
+          [security]
+          trusted_ips = ["127.0.0.1/32", "::1/128"]
+          api_keys_file = "data/api_keys.json"
+          [providers.maxmind]
+          city = "data/databases/City.mmdb"
+          '@ | Set-Content -Path $config -Encoding utf8
+          $keyOutput = (& $exe --config $config --api-key --api-key-name "R4 Service CI") -join "`n"
+          $keyMatch = [regex]::Match($keyOutput, "API Key: (rvg_[a-f0-9]{64})")
+          if (-not $keyMatch.Success) { throw "Could not create service smoke API key" }
+          $headers = @{ "X-API-Key" = $keyMatch.Groups[1].Value }
+          $url = "http://127.0.0.1:19002/v1/geoip?ip=81.2.69.160"
+          $installed = $false
+
+          function Wait-GeoIp {
+            param([int] $Attempts = 120)
+            for ($i = 0; $i -lt $Attempts; $i++) {
+              try {
+                $response = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 2
+                if ($response.country -eq "United Kingdom" -and $response.sources.location -eq "maxmind") { return }
+              } catch { }
+              Start-Sleep -Milliseconds 500
+            }
+            throw "Windows Service did not expose the authenticated HTTP API"
+          }
+
+          try {
+            & $exe --config $config service install
+            if ($LASTEXITCODE -ne 0) { throw "Service install failed" }
+            $installed = $true
+            $recovery = (sc.exe qfailure RemVibeGeoLocation) -join "`n"
+            if ($recovery -notmatch "RESTART") { throw "SCM failure recovery is not configured" }
+            $qc = (sc.exe qc RemVibeGeoLocation) -join "`n"
+            if ($qc -notmatch "LocalService") { throw "Service is not using LocalService" }
+
+            & $exe service start
+            if ($LASTEXITCODE -ne 0) { throw "Service start failed" }
+            Wait-GeoIp
+            $state = (& $exe service status) -join "`n"
+            if ($state -notmatch "Running") { throw "SCM did not transition to RUNNING" }
+            & $exe service stop
+            if ($LASTEXITCODE -ne 0) { throw "Service stop failed" }
+
+            # Hold its TCP port, start it again and then release the port:
+            # process must recover without an external restart command.
+            $blocker = [System.Net.Sockets.TcpListener]::new(
+              [System.Net.IPAddress]::Loopback, 19002
+            )
+            $blocker.Start()
+            try {
+              & $exe service start
+              if ($LASTEXITCODE -ne 0) { throw "SCM start under TCP collision failed" }
+              Start-Sleep -Seconds 3
+              $pending = (& $exe service status) -join "`n"
+              if ($pending -notmatch "StartPending") {
+                throw "SCM should remain START_PENDING during TCP recovery, got: $pending"
+              }
+            } finally {
+              $blocker.Stop()
+            }
+            Wait-GeoIp
+            $recovered = (& $exe service status) -join "`n"
+            if ($recovered -notmatch "Running") { throw "Service did not recover its listening socket" }
+            & $exe service stop
+            if ($LASTEXITCODE -ne 0) { throw "Recovered service stop failed" }
+
+            $log = Join-Path $data "logs/remvibe-geolocation.log"
+            if (-not (Test-Path $log)) { throw "Service file logging not initialized" }
+            if (-not (Select-String -Path $log -Pattern "TCP binding unavailable")) {
+              throw "Missing diagnostic evidence for TCP startup recovery"
+            }
+            Write-Host "R4 native SCM smoke passed including TCP bind recovery and authenticated HTTP"
+          } finally {
+            if ($installed) {
+              & $exe service uninstall
+            }
+          }

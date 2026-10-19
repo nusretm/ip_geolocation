@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, sync::Arc};
+use std::{io::ErrorKind, net::{IpAddr, SocketAddr}, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -12,6 +12,7 @@ use axum::{
 use ipnet::IpNet;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::{oneshot, watch};
 use tracing::{info, warn};
 
 use crate::{config::Config, geoip::{dbip::update::DbIpUpdater, maxmind::update::MaxMindUpdater, GeoService}, security};
@@ -139,8 +140,82 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Console and Windows SCM use the same long-running HTTP implementation.
+/// A console Ctrl+C is converted to the same cooperative shutdown signal as
+/// a Windows Service Stop control.
 pub async fn serve(config: Config) -> Result<()> {
+    let (sender, shutdown) = watch::channel(false);
+    let ctrl_c = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("Console shutdown requested");
+            let _ = sender.send(true);
+        }
+    });
+    let result = serve_managed(config, shutdown, None).await;
+    ctrl_c.abort();
+    result
+}
+
+fn can_retry_bind(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::AddrNotAvailable | ErrorKind::AddrInUse | ErrorKind::NetworkUnreachable
+            | ErrorKind::ConnectionRefused | ErrorKind::TimedOut
+    ) || matches!(error.raw_os_error(), Some(10049 | 10050 | 10051 | 10048))
+}
+
+/// Bind retry is bounded to three minutes so a permanently broken startup
+/// transitions to failure and SCM recovery policy can restart the process.
+/// Stop requests interrupt the sleep; no long-running busy loop.
+async fn bind_with_retry(
+    address: SocketAddr,
+    mut shutdown: watch::Receiver<bool>,
+    timeout: Duration,
+) -> Result<Option<tokio::net::TcpListener>> {
+    let started = Instant::now();
+    let mut delay = Duration::from_secs(1);
+    let mut attempt = 0_u64;
+    loop {
+        if *shutdown.borrow() { return Ok(None); }
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(listener) => {
+                if attempt != 0 { info!(attempt, address = %address, "TCP became available; listener recovered"); }
+                return Ok(Some(listener));
+            }
+            Err(error) => {
+                if !can_retry_bind(&error) || started.elapsed() >= timeout {
+                    return Err(error).with_context(|| format!(
+                        "Cannot bind {address}; stopped retrying after {attempt} attempt(s)"
+                    ));
+                }
+                attempt += 1;
+                let remaining = timeout.saturating_sub(started.elapsed());
+                warn!(
+                    address = %address, attempt, error = %error,
+                    retry_seconds = delay.as_secs(),
+                    "TCP binding unavailable; retrying while waiting for network/port"
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(delay.min(remaining)) => {}
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() { return Ok(None); }
+                    }
+                }
+                delay = delay.saturating_mul(2).min(Duration::from_secs(30));
+            }
+        }
+    }
+}
+
+/// Reports readiness only after the listening socket exists. SCM can keep
+/// START_PENDING checkpoints active while MMDB bootstrap or TCP recovery runs.
+pub async fn serve_managed(
+    config: Config,
+    mut shutdown: watch::Receiver<bool>,
+    ready: Option<oneshot::Sender<()>>,
+) -> Result<()> {
     let address = config.socket_addr();
+    if *shutdown.borrow() { return Ok(()); }
     let updater = if config.providers.maxmind.updates.enabled {
         Some(MaxMindUpdater::new(&config.providers.maxmind)?)
     } else {
@@ -198,18 +273,22 @@ pub async fn serve(config: Config) -> Result<()> {
 
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .with_context(|| format!("Could not bind to {address}"))?;
+    let Some(listener) = bind_with_retry(address, shutdown.clone(), Duration::from_secs(180)).await? else {
+        info!("Stop requested while waiting for TCP listener; shutting down cleanly");
+        return Ok(());
+    };
     info!(address = %address, "HTTP service listening");
+    if let Some(ready) = ready { let _ = ready.send(()); }
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            info!("Shutdown requested");
+    .with_graceful_shutdown(async move {
+        loop {
+            if *shutdown.borrow() { break; }
+            if shutdown.changed().await.is_err() { break; }
         }
+        info!("HTTP server graceful shutdown requested");
     })
     .await
     .context("HTTP service stopped with an error")
@@ -221,6 +300,31 @@ mod tests {
     use std::{io::Write, time::Duration};
 
     use crate::{config::Config, geoip::maxmind::schedule::DatabaseKind};
+
+
+    #[tokio::test]
+    async fn busy_port_recovers_without_process_restart() {
+        let blocker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = blocker.local_addr().unwrap();
+        let (_sender, shutdown) = watch::channel(false);
+        let pending = tokio::spawn(bind_with_retry(address, shutdown, Duration::from_secs(4)));
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!pending.is_finished());
+        drop(blocker);
+        let listener = tokio::time::timeout(Duration::from_secs(3), pending).await.unwrap().unwrap().unwrap().unwrap();
+        assert_eq!(listener.local_addr().unwrap(), address);
+    }
+
+    #[tokio::test]
+    async fn stop_interrupts_tcp_retry_without_waiting_for_backoff() {
+        let blocker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (sender, shutdown) = watch::channel(false);
+        let pending = tokio::spawn(bind_with_retry(blocker.local_addr().unwrap(), shutdown, Duration::from_secs(180)));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        sender.send(true).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), pending).await.unwrap().unwrap().unwrap();
+        assert!(result.is_none());
+    }
 
     #[tokio::test]
     async fn json_responses_declare_utf8_and_preserve_turkish_characters() {

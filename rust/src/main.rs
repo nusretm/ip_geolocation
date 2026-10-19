@@ -3,17 +3,48 @@ mod geoip;
 mod security;
 mod server;
 
+#[cfg(windows)]
+mod windows_service;
+
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing::info;
+
+#[derive(Debug, Clone, Subcommand)]
+enum ServiceCommand {
+    /// Register an automatic, delayed-start Windows Service (admin required).
+    Install,
+    /// Remove the registered Windows Service (admin required).
+    Uninstall,
+    /// Request service startup from Windows SCM.
+    Start,
+    /// Request graceful shutdown from Windows SCM.
+    Stop,
+    /// Display SCM state and process ID.
+    Status,
+    /// Internal SCM entry point; do not invoke interactively.
+    Run,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum CliCommand {
+    /// Native Windows Service administration and runtime.
+    Service {
+        #[command(subcommand)]
+        action: ServiceCommand,
+    },
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "remvibe-geolocation", version, about = "Private GeoLocation HTTP service")]
 struct Cli {
-    #[arg(long, default_value = "config.toml", value_name = "FILE")]
+    #[arg(long, default_value = "config.toml", value_name = "FILE", global = true)]
     config: PathBuf,
+
+    #[command(subcommand)]
+    command: Option<CliCommand>,
 
     #[arg(long = "api-key", visible_alias = "new-api-key", conflicts_with_all = ["delete_api_key", "api_key_list"])]
     api_key: bool,
@@ -34,13 +65,38 @@ struct Cli {
     check_dbip_updates: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    if let Some(CliCommand::Service { action }) = cli.command.as_ref() {
+        #[cfg(windows)]
+        {
+            return match action {
+                ServiceCommand::Install => windows_service::management::install(&cli.config),
+                ServiceCommand::Uninstall => windows_service::management::uninstall(),
+                ServiceCommand::Start => windows_service::management::start(),
+                ServiceCommand::Stop => windows_service::management::stop(),
+                ServiceCommand::Status => windows_service::management::status(),
+                ServiceCommand::Run => windows_service::runtime::dispatch(cli.config.clone()),
+            };
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = action;
+            bail!("Windows Service management is supported only on Windows");
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let cli = Cli::parse();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all().build()?;
+    runtime.block_on(async_main(cli))
+}
+
+async fn async_main(cli: Cli) -> Result<()> {
     let config = config::Config::load(&cli.config)?;
 
     if cli.api_key {
@@ -96,4 +152,22 @@ async fn main() -> Result<()> {
 
     info!("Starting RemVibe GeoLocation HTTP foundation");
     server::serve(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scm_actions_have_service_command_prefix() {
+        let parsed = Cli::try_parse_from(["geo", "--config", "example.toml", "service", "install"]).unwrap();
+        assert!(matches!(parsed.command, Some(CliCommand::Service { action: ServiceCommand::Install })));
+
+        let parsed = Cli::try_parse_from(["geo", "service", "run", "--config", "example.toml"]).unwrap();
+        assert!(matches!(parsed.command, Some(CliCommand::Service { action: ServiceCommand::Run })));
+
+        assert!(Cli::try_parse_from(["geo", "install"]).is_err());
+        let legacy = Cli::try_parse_from(["geo", "--check-updates"]).unwrap();
+        assert!(legacy.check_updates);
+    }
 }

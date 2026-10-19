@@ -139,3 +139,19 @@ R3B does **not** add DB-IP or Windows Service Control Manager integration.
 
 MaxMind documents direct database download behavior and limits at
 https://dev.maxmind.com/geoip/updating-databases/.
+
+## PowerShell UTF-8 JSON compatibility
+
+The service declares `Content-Type: application/json; charset=utf-8` for
+JSON success and error responses. This matters for legacy Windows PowerShell
+5.1, which may otherwise decode UTF-8 response bytes using Latin-1 and
+display `Türkiye` as `TÃ¼rkiye`. The MMDB and JSON payload are UTF-8; the
+HTTP response now advertises the character encoding explicitly.
+
+After updating the code, **restart the server process** to load the header
+change. Test with:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:19000/v1/geoip?ip=88.226.122.192" -Headers @{ "X-API-Key" = $apiKey }
+```
+

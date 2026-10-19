@@ -90,9 +90,20 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
   country. Existing maxmind-priority and ASN consistency tests remain.
 - Preserve API schema and authenticated routes; do not modify Windows Service
   infrastructure or provider updater behavior; no Git secrets/MMDB.
-- Pending: CI cross-platform proof, actual Windows local two-provider smoke,
-  explicit user merge approval. Merge into `main` before integrating into
-  R4 branch.
+- CI verified on code commit `08e97ff`: GitHub Actions
+  https://github.com/nusretm/ip_geolocation/actions/runs/39312099907
+  passed `cargo check --locked --workspace`, **29/29 unit tests**,
+  authenticated MMDB HTTP smoke and actual DB-IP Lite Country/ASN downloads
+  and HTTP checks on **both Ubuntu and Windows**.
+- User independently verified Windows R4 SCM Stop on PID `23468`:
+  `Running` → `Stopped`, PID cleared, `Win32(0)`.
+  The installed R4 service is **separate** and must be kept safe while
+  testing this main-derived fix; avoid overwriting its registered
+  `target/debug/remvibe-geolocation.exe`. Use a sibling git worktree for
+  local console testing.
+- Pending: actual Windows local **two-provider** response smoke (same
+  `8.8.8.8` request), explicit user merge approval. Merge this isolated
+  fix into `main` before integrating the merged fix into R4.
 
 ## Deferred / constraints
 

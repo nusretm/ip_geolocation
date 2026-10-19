@@ -101,9 +101,19 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
   testing this main-derived fix; avoid overwriting its registered
   `target/debug/remvibe-geolocation.exe`. Use a sibling git worktree for
   local console testing.
-- Pending: actual Windows local **two-provider** response smoke (same
-  `8.8.8.8` request), explicit user merge approval. Merge this isolated
-  fix into `main` before integrating the merged fix into R4.
+- Windows local **two-provider** smoke verified on the detached fix
+  worktree at `978ab42`: `cargo check --locked --workspace` clean,
+  `cargo test --locked --workspace` **29/29 passed**. Console server loaded
+  the existing authenticated config on `127.0.0.1:19000`; its live
+  `8.8.8.8` response returned `Mountain View`, `California`,
+  `37.422,-122.085`, `time_zone=null`, `country_code=US`,
+  `asn.number=15169` and `sources.location=maxmind+dbip`.
+  The prior mismatched MaxMind US centroid and Chicago time zone no longer
+  leak into the DB-IP city profile.
+- Latest PR #7 head `978ab42` completed successful GitHub Actions on
+  Windows and Ubuntu: https://github.com/nusretm/ip_geolocation/actions/runs/39312501806 .
+- Pending: explicit user merge approval. Merge the isolated fix into `main`
+  before integrating the merged fix into R4 PR #6.
 
 ## Deferred / constraints
 

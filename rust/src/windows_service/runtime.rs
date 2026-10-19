@@ -158,10 +158,21 @@ async fn run_async(
                     handler.set_service_status(status(ServiceState::StopPending, 1, 0))?;
                     info!("Windows Service STOP_PENDING; draining HTTP requests");
                     match tokio::time::timeout(Duration::from_secs(25), &mut server_task).await {
-                        Ok(result) => return result.context("HTTP task error during shutdown")?,
+                        Ok(Ok(Ok(()))) => return Ok(()),
+                        Ok(Ok(Err(error))) => {
+                            // Intentional administrator stop wins over a late
+                            // shutdown error; never trigger SCM auto-recovery.
+                            warn!(error = %error, "HTTP shutdown reported an error after SCM Stop");
+                            return Ok(());
+                        }
+                        Ok(Err(error)) => {
+                            warn!(error = %error, "HTTP task stopped unexpectedly during SCM Stop");
+                            return Ok(());
+                        }
                         Err(_) => {
+                            warn!("HTTP shutdown exceeded 25s; aborting without SCM recovery");
                             server_task.abort();
-                            return Err(anyhow!("Timed out waiting for HTTP graceful shutdown"));
+                            return Ok(());
                         }
                     }
                 }

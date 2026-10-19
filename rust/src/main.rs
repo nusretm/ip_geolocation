@@ -1,4 +1,5 @@
 mod config;
+mod geoip;
 mod security;
 mod server;
 
@@ -14,11 +15,17 @@ struct Cli {
     #[arg(long, default_value = "config.toml", value_name = "FILE")]
     config: PathBuf,
 
-    #[arg(long, conflicts_with = "delete_api_key")]
-    new_api_key: bool,
+    #[arg(long = "api-key", visible_alias = "new-api-key", conflicts_with_all = ["delete_api_key", "api_key_list"])]
+    api_key: bool,
 
-    #[arg(long, value_name = "API_KEY")]
+    #[arg(long = "api-key-name", value_name = "NAME", requires = "api_key")]
+    api_key_name: Option<String>,
+
+    #[arg(long, value_name = "API_KEY", conflicts_with = "api_key_list")]
     delete_api_key: Option<String>,
+
+    #[arg(long = "api-key-list")]
+    api_key_list: bool,
 }
 
 #[tokio::main]
@@ -30,9 +37,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = config::Config::load(&cli.config)?;
 
-    if cli.new_api_key {
-        let key = security::create_api_key(&config.security.api_keys_file)?;
-        println!("API key created successfully. Save it securely; it will not be shown again.\nAPI Key: {key}");
+    if cli.api_key {
+        let name = cli.api_key_name.as_deref().unwrap_or("Unnamed application");
+        let key = security::create_api_key(&config.security.api_keys_file, name)?;
+        println!("API key created for '{name}'. Save it securely; it will not be shown again.\nAPI Key: {key}");
         return Ok(());
     }
 
@@ -42,6 +50,20 @@ async fn main() -> Result<()> {
             println!("API key deleted successfully.");
         } else {
             println!("API key not found.");
+        }
+        return Ok(());
+    }
+
+    if cli.api_key_list {
+        let keys = security::list_api_keys(&config.security.api_keys_file)?;
+        if keys.is_empty() {
+            println!("No API keys configured.");
+        } else {
+            println!("{:<26} {:<21} {}", "APPLICATION", "KEY ID", "CREATED (UNIX UTC)");
+            for key in keys {
+                println!("{:<26} {:<21} {}", key.name, key.id,
+                    key.created_at_unix.map(|value| value.to_string()).unwrap_or_else(|| "-".into()));
+            }
         }
         return Ok(());
     }

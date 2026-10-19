@@ -7,3 +7,10 @@ port = 19000
 # Both trusted IP and API key are always required.
 trusted_ips = ["127.0.0.1/32", "::1/128"]
 api_keys_file = "data/api_keys.json"
+
+# Uncomment database paths when local MMDB files are available.
+# Loading an explicitly configured, missing/corrupt database fails startup.
+[providers.maxmind]
+# city = "data/databases/GeoLite2-City.mmdb"
+# country = "data/databases/GeoLite2-Country.mmdb"
+# asn = "data/databases/GeoLite2-ASN.mmdb"

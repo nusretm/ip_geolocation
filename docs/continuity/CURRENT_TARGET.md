@@ -138,7 +138,28 @@ failed listener bind must never permanently disable the service.
   follow-up fix in `windows_service/runtime.rs` awaits the server task
   and propagates the **underlying bind error** into SCM logs, avoiding a
   misleading error; early intentional Stop remains clean.
-- Local clean-window restart and reboot-startup smoke are still pending.
+- **Windows user live recovery verified**: inspected TCP port `19000` owner
+  PID `14604` and confirmed the process was
+  `D:\\development\\rust\\ip_geolocation_geo_fix\\target\\debug\\remvibe-geolocation.exe`
+  (the separate console test worktree). After the user stopped that known
+  competing process, the port query was empty; SCM automatically recovered
+  the service to `Running` without the user needing to issue Start.
+  The running service PID was `28416`, matching the TCP listener owner
+  PID `28416` at `127.0.0.1:19000`; `sc.exe queryex` confirmed
+  `STATE: RUNNING` and `WIN32_EXIT_CODE: 0`.
+- An authenticated Windows REST query **served by the verified service**
+  returned `8.8.8.8` as Mountain View/California,
+  `37.422,-122.085`, null time zone, Google LLC/ASN 15169 and
+  `sources.location=maxmind+dbip`. The GeoIP coherence fix is
+  verified through the actual Windows Service, not just the console.
+- Latest PR #6 head `354294e` passed both GitHub Actions workflows
+  (Windows and Ubuntu), including native SCM installation and port recovery.
+  CI: https://github.com/nusretm/ip_geolocation/actions/runs/39318023050
+  and https://github.com/nusretm/ip_geolocation/actions/runs/39318016043 .
+- **Still unverified:** Windows *reboot* automatic startup under real
+  early-boot network conditions. The service's TCP port-conflict
+  recovery and SCM restart behavior are verified, but an actual reboot
+  and post-boot check remain separate acceptance evidence.
   No merge of R4 PR #6 without explicit user approval.
 
 ## Risks / constraints

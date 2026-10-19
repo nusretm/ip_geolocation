@@ -40,10 +40,12 @@ impl MaxMindReaders {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn active_build_epoch(&self, kind: DatabaseKind) -> Option<u64> {
         self.slot(kind).build_epoch()
     }
 
+    #[cfg(test)]
     pub fn active_fingerprint(&self, kind: DatabaseKind) -> Option<DatabaseFingerprint> {
         self.slot(kind).fingerprint()
     }

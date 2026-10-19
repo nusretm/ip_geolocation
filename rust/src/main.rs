@@ -56,8 +56,7 @@ struct Cli {
     check_dbip_updates: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if let Some(action) = cli.service.as_ref() {
@@ -83,6 +82,12 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all().build()?;
+    runtime.block_on(async_main(cli))
+}
+
+async fn async_main(cli: Cli) -> Result<()> {
     let config = config::Config::load(&cli.config)?;
 
     if cli.api_key {

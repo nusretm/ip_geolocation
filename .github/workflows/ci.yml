@@ -20,6 +20,13 @@ jobs:
         run: cargo check --workspace
       - name: Test
         run: cargo test --workspace
+      - name: Generate reproducible Cargo.lock for R3A (temporary)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          echo 'BEGIN_R3A_CARGO_LOCK'
+          cat Cargo.lock
+          echo 'END_R3A_CARGO_LOCK'
       - name: Smoke secured HTTP and MMDB lookups
         shell: pwsh
         run: |

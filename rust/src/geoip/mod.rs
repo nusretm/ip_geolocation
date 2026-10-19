@@ -46,6 +46,12 @@ impl GeoLocation {
     /// ASN numbers or potentially unrelated organizations.
     fn fill_missing(&mut self, next: GeoLocation) {
         let mut new_location = false;
+        // Refuse contradictory country records. A city/coordinate from another
+        // country must not be combined with MaxMind's country.
+        let compatible_country = match (&self.country_code, &next.country_code) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            _ => true,
+        };
         macro_rules! fill {
             ($field:ident) => {
                 if self.$field.is_none() && next.$field.is_some() {
@@ -54,14 +60,16 @@ impl GeoLocation {
                 }
             };
         }
-        fill!(country_code);
-        fill!(country);
-        fill!(city);
-        fill!(region);
-        fill!(postal_code);
-        fill!(latitude);
-        fill!(longitude);
-        fill!(time_zone);
+        if compatible_country {
+            fill!(country_code);
+            fill!(country);
+            fill!(city);
+            fill!(region);
+            fill!(postal_code);
+            fill!(latitude);
+            fill!(longitude);
+            fill!(time_zone);
+        }
         if new_location {
             self.sources.location = match (self.sources.location, next.sources.location) {
                 (Some("maxmind"), Some("dbip")) => Some("maxmind+dbip"),
@@ -165,6 +173,23 @@ mod merge_tests {
         assert_eq!(maxmind.city.as_deref(), Some("Mountain View"));
         assert_eq!(maxmind.sources.location, Some("maxmind+dbip"));
         assert!(maxmind.uses_dbip());
+    }
+
+    #[test]
+    fn inconsistent_country_is_not_mixed_with_fallback_city() {
+        let mut first = GeoLocation {
+            country_code: Some("TR".into()),
+            country: Some("Türkiye".into()),
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        first.fill_missing(GeoLocation {
+            country_code: Some("US".into()), city: Some("Boston".into()),
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        });
+        assert!(first.city.is_none());
+        assert_eq!(first.sources.location, Some("maxmind"));
     }
 
     #[test]

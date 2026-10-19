@@ -29,7 +29,7 @@ jobs:
           "MAXMIND_TEST_MMDB_ALTERNATE_PATH=$alternate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Test
         run: cargo test --locked --workspace
-      - name: Smoke secured HTTP and MMDB lookups
+      - name: Smoke trusted-IP or API-key HTTP and MMDB lookups
         shell: pwsh
         run: |
           cargo build --locked --workspace
@@ -75,7 +75,9 @@ jobs:
             }
             if ($null -eq $response -or $response.StatusCode -ne 200) { throw "Server did not answer with 200" }
             $missing = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -SkipHttpErrorCheck
-            if ($missing.StatusCode -ne 401) { throw "Missing key was accepted" }
+            if ($missing.StatusCode -ne 200) { throw "Trusted TCP peer was wrongly rejected without API key" }
+            $invalidHeader = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -Headers @{ "X-API-Key" = "invalid-key" } -SkipHttpErrorCheck
+            if ($invalidHeader.StatusCode -ne 200) { throw "Trusted TCP peer was wrongly rejected with invalid API key" }
 
             $city = Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/geoip?ip=81.2.69.160" -Headers @{ "X-API-Key" = $key }
             if ($city.country -ne "United Kingdom" -or $city.sources.location -ne "maxmind") {
@@ -90,7 +92,7 @@ jobs:
 
             & $exe --config $config --delete-api-key $key
             $revoked = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -Headers @{ "X-API-Key" = $key } -SkipHttpErrorCheck
-            if ($revoked.StatusCode -ne 401) { throw "Revoked API key was accepted" }
+            if ($revoked.StatusCode -ne 200) { throw "Trusted TCP peer was wrongly denied after its key was revoked" }
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
@@ -151,7 +153,7 @@ jobs:
             $info = Invoke-RestMethod -Uri "http://127.0.0.1:19001/v1/attribution" -Headers @{ "X-API-Key" = $key }
             if ($info.dbip.url -ne "https://db-ip.com") { throw "Attribution endpoint failed" }
             $unauthorized = Invoke-WebRequest -Uri "http://127.0.0.1:19001/v1/attribution" -SkipHttpErrorCheck
-            if ($unauthorized.StatusCode -ne 401) { throw "Attribution endpoint accepted an unauthorized caller" }
+            if ($unauthorized.StatusCode -ne 200) { throw "Attribution endpoint rejected trusted TCP peer without a key" }
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
@@ -209,6 +211,8 @@ jobs:
             & $exe service start
             if ($LASTEXITCODE -ne 0) { throw "Service start failed" }
             Wait-GeoIp
+            $keylessService = Invoke-RestMethod -Uri $url -TimeoutSec 2
+            if ($keylessService.country -ne "United Kingdom") { throw "Trusted TCP peer cannot use Windows Service HTTP without API key" }
             $state = (& $exe service status) -join "`n"
             if ($state -notmatch "Running") { throw "SCM did not transition to RUNNING" }
             & $exe service stop

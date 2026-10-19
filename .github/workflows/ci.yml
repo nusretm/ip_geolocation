@@ -20,3 +20,37 @@ jobs:
         run: cargo check --workspace
       - name: Test
         run: cargo test --workspace
+      - name: Smoke secured localhost HTTP endpoint
+        shell: pwsh
+        run: |
+          cargo build --workspace
+          $exe = if ($IsWindows) { "./target/debug/remvibe-geolocation.exe" } else { "./target/debug/remvibe-geolocation" }
+          $keyOutput = & $exe --new-api-key
+          $keyMatch = [regex]::Match(($keyOutput -join "`n"), "API Key: (rvg_[a-f0-9]{64})")
+          if (-not $keyMatch.Success) { throw "Could not create an API key" }
+          $key = $keyMatch.Groups[1].Value
+          $server = Start-Process -FilePath $exe -PassThru -NoNewWindow
+          try {
+            $result = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              try {
+                $result = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -Headers @{ "X-API-Key" = $key } -SkipHttpErrorCheck
+                break
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if ($null -eq $result) { throw "HTTP server did not start" }
+            if ($result.StatusCode -ne 200) { throw "Authorized endpoint failed" }
+            $body = $result.Content | ConvertFrom-Json
+            if ($body.service -ne "remvibe-geolocation" -or $body.status -ne "ok") { throw "Unexpected response body" }
+            $health = Invoke-WebRequest -Uri "http://127.0.0.1:19000/v1/health" -Headers @{ "X-API-Key" = $key } -SkipHttpErrorCheck
+            if ($health.StatusCode -ne 200) { throw "Health endpoint failed" }
+            $missing = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -SkipHttpErrorCheck
+            if ($missing.StatusCode -ne 401) { throw "Missing API key was accepted" }
+            & $exe --delete-api-key $key
+            $revoked = Invoke-WebRequest -Uri "http://127.0.0.1:19000/" -Headers @{ "X-API-Key" = $key } -SkipHttpErrorCheck
+            if ($revoked.StatusCode -ne 401) { throw "Revoked API key was accepted" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }

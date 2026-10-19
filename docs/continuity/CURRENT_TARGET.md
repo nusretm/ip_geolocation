@@ -49,8 +49,14 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
   Windows and Ubuntu checks, **24/24 tests**, existing secured REST smoke and real
   DB-IP Country/ASN Lite HTTP smoke all passed. The strengthened real DB-IP-only
   request asserted Google `8.8.8.8` ASN 15169 and `sources.asn=dbip`.
-- DB-IP City-only HTTP response is not yet separately verified on user's
-  Windows system; MaxMind's prioritized response does not prove DB-IP City.
+- DB-IP-only Windows HTTP smoke is now proven with `--config data/dbip-only-test.toml`
+  on `127.0.0.1:19001` (no MaxMind reader): the authenticated request for
+  `8.8.8.8` returned Country `United States/US`, City `Mountain View`,
+  Region `California`, coordinates `37.422, -122.085`, ASN `15169`
+  (`Google LLC`), and `sources.location=dbip` / `sources.asn=dbip`.
+  Missing postal code and time zone remained null as expected for DB-IP Lite.
+- The latest PR #5 push and pull-request GitHub Actions checks for `fc656ce`
+  both succeeded on Windows and Linux.
 - PR #5 remains **draft**. No merge without user's explicit approval.
 
 ## Deferred / constraints

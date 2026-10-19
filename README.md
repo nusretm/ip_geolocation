@@ -223,3 +223,73 @@ For full terms see [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The new DB-IP functionality is optional; existing MaxMind-only config and
 CLI commands continue to work. Databases are approximations of IP geolocation,
 and the Lite datasets have lower accuracy than DB-IP commercial editions.
+
+
+## R4 — Native Windows Service (SCM)
+
+The same `remvibe-geolocation.exe` can run interactively (Ctrl+C) or as a
+Windows service without changing HTTP security, MaxMind/DB-IP provider logic,
+or database update behavior. Windows service support is compiled only on
+Windows; Linux console deployment remains available.
+
+**Production:** copy a `--release` binary into a stable installation folder.
+The install command registers the **exact current executable path**; do not
+rely on a mutable `target/debug` binary in production. Run the following from
+**elevated PowerShell** after making an accessible `config.toml`:
+
+```powershell
+$exe = "C:\\Services\\RemVibeGeoLocation\\remvibe-geolocation.exe"
+$config = "C:\\Services\\RemVibeGeoLocation\\config.toml"
+
+& $exe --config $config service install
+& $exe service status
+& $exe service start
+& $exe service status
+
+# Uses normal X-API-Key / trusted-client-IP authentication:
+Invoke-RestMethod -Uri "http://127.0.0.1:19000/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $apiKey }
+
+& $exe service stop
+& $exe service uninstall
+```
+
+The service is registered as `RemVibeGeoLocation` (`RemVibe GeoLocation
+Service`), runs as **NT AUTHORITY\\LocalService**, starts **Automatic
+(Delayed Start)**, uses absolute paths to the executable and config, and
+applies the service SID access rights to the executable, config file and
+`<config-dir>/data/` directory. Install/uninstall and access-control changes
+require administrator privileges. Custom MMDB/credentials/state directories
+**outside** the default data directory require an administrator to grant
+explicit rights to `NT SERVICE\\RemVibeGeoLocation`. The installer does
+not rewrite or expose secrets. `service uninstall` does not delete local
+MMDB files, credentials or logs.
+
+**Recovery when Windows boots before TCP/network is ready:**
+
+- SCM delayed automatic start reduces exposure to early-boot NIC readiness
+  races, but does not assume the network is already usable.
+- If the listening socket cannot bind due to an unavailable local address,
+  down/unreachable network or a port already occupied, the server retries
+  with capped exponential delays **1s, 2s, 4s, 8s, 16s, then at most 30s**.
+  Successful retry begins HTTP service without exiting or restarting.
+- It reports `START_PENDING` with regular checkpoint updates while
+  initializing and retrying; it reports `RUNNING` only once HTTP actually
+  listens. Shutdown interrupts waiting immediately. If the problem lasts
+  **180s**, startup exits with an error and SCM recovery retries the service
+  (configured actions after **30s, 60s, then 120s**). Later failures continue
+  using the last recovery action; a deliberate `service stop` does not
+  trigger a recovery restart.
+- A failed network bind will never disable Windows' service registration.
+  Persistent misconfiguration (wrong IP/permissions) still needs correcting.
+- Diagnostics go to
+  `<config-dir>/data/logs/remvibe-geolocation.log`, including retry/error
+  messages. Periodically rotate or archive this file for long-lived services.
+- **Windows services do not inherit environment variables from the terminal
+  of the user who installed them.** If MaxMind needs credentials for automatic
+  updates, configure credentials securely for the service account (for
+  example secured configuration or appropriate machine-level environment).
+  Keep credentials out of Git.
+
+The `service run` subcommand is the internal SCM entry point, not intended
+for direct interactive use. On Linux, `service` commands are explicitly
+unsupported, but the default console and update CLI remains unchanged.

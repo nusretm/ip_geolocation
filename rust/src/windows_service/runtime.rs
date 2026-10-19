@@ -74,8 +74,9 @@ fn status(state: ServiceState, checkpoint: u32, exit_code: u32) -> ServiceStatus
 
 fn run_service() -> Result<()> {
     let path = CONFIG_PATH.get().context("Missing Windows Service configuration")?.clone();
-    init_service_logging(&path)?;
 
+    // Register first so even a log/permission startup failure produces a
+    // deterministic nonzero STOPPED state that triggers SCM recovery.
     let (stop_tx, stop_rx) = watch::channel(false);
     let handler = service_control_handler::register(SERVICE_NAME, move |control| {
         match control {
@@ -90,6 +91,7 @@ fn run_service() -> Result<()> {
     handler.set_service_status(status(ServiceState::StartPending, 1, 0))?;
 
     let outcome = (|| -> Result<()> {
+        init_service_logging(&path)?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all().build().context("Cannot start service async runtime")?;
         runtime.block_on(run_async(path, stop_rx, &handler))

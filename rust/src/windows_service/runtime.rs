@@ -50,7 +50,7 @@ fn init_service_logging(config_path: &Path) -> Result<()> {
                 Err(_) => Box::new(io::stderr()),
             }
         })
-        .try_init().context("Cannot initialize service logging")?;
+        .try_init().map_err(|error| anyhow!("Cannot initialize service logging: {error}"))?;
     info!(log = %log_path.display(), "Windows Service log initialized");
     Ok(())
 }

@@ -1,52 +1,63 @@
-# Current Target — R3A MaxMind Automatic Offline Database Updates
+# Current Target — R3B Live MMDB Activation
 
 Repository: `nusretm/ip_geolocation` · 2026-10-19
 
-## Completed
+## Confirmed baseline
 
-- R1 (PR #1): trusted-IP and API key secured Axum REST API on localhost:19000.
-- R2 (PR #2): named API keys, offline MaxMind City/Country/ASN MMDB and `/v1/geoip`.
-- Windows local confirmation: live secured API and synthetic MMDB lookups.
-- `main` baseline: `b30710c`.
+- R1 PR #1, R2 PR #2, R3A PR #3 merged into `main` (R3A commit `573ddcf`).
+- Local Windows user evidence: actual MaxMind City, Country and ASN downloads,
+  a second metadata check returned all three `up-to-date`, 0 failures.
+- R3B local Windows evidence: authenticated HTTP live-MMDB swap and corrupt-MMDB protection,
+  `cargo test --locked --workspace` **15/15 passed**; local check exposed only
+  test-helper `dead_code` warnings, now limited to test builds.
+- R3B CI Linux/Windows completed 15/15 tests plus secured REST smoke checks on the
+  earlier PR revision. Encoding regression CI is pending after the latest fix.
 
-## R3A approved scope
+## Approved R3B work
 
-- MaxMind provider controls its own releases: GeoLite2 City/Country Tuesday + Friday,
-  GeoLite2 ASN Monday-Friday, optional GeoIP2 City/Country Monday-Friday.
-- Authenticated HTTPS direct download using account ID and license key from
-  environment variables or local ignored `config.toml`.
-- MaxMind `HEAD` checks with Last-Modified and optional ETag; force a manual
-  check with `--check-updates` and start scheduler with `updates.enabled=true`.
-- HTTPS redirect allowlist covering MaxMind download host and documented
-  Cloudflare R2 distribution hostname; credentials not sent to CDN.
-- Stream bounded tar.gz download, safely extract matching .mmdb, verify metadata
-  and database type, atomically write validated file.
-- Persist last attempt/check/update, remote version fields, build epoch, and
-  rate-limit backoff; use lock to avoid multiple concurrent updater processes.
-- Bootstrap missing databases before loading GeoIP service; existing offline
-  data remains usable if network fails.
+- Separate independent read slots for City, Country and ASN, shared by the
+  MaxMind provider and its running updater.
+- `ReaderSlot` uses a short `RwLock` to atomically exchange
+  `Arc<Reader<Vec<u8>>>` values. A lookup retains its Arc and decodes without
+  holding any slot lock; in-flight lookups complete from the previous reader.
+- Stream/extract/validate MMDB into a temporary file, eagerly load its reader,
+  atomically persist the MMDB to disk, and then publish the new reader.
+- Failed download, invalid database or failed disk persist never switches the
+  active reader. Reader data is owned in memory; no persistent MMDB file handle.
+- MaxMind updater can be attached to the live reader set on server startup.
+  The external `--check-updates` CLI only writes on disk. The running server
+  detects a newly built database and activates it on the next scheduler poll,
+  even if remote version checks are not due.
+- Keep existing CLI, API-key/TCP IP authentication and HTTP response contract.
+- Test on Windows/Linux with official synthetic MMDB files, including an
+  authenticated running HTTP server, concurrent lookups, successful City reader
+  replacement and rejection of corrupt MMDB.
 
-## Explicitly deferred to R3B / R3C
+## HTTP JSON encoding compatibility
 
-- **No hot reload in R3A.** After automatic download, live in-memory readers
-  continue to return the old data until process restart. R3B will swap readers.
-- R3B: robust Windows-safe live activation and rollback.
-- R3C: DB-IP downloader, release detection and provider.
-- Windows Service/SCM, TLS deployment and UI are outside R3A.
+- The running Axum REST API marks JSON content type explicitly as
+  `application/json; charset=utf-8` on both successful responses and JSON
+  authentication/error responses; this corrects the `TÃ¼rkiye` display seen
+  in Windows PowerShell 5.1 when UTF-8 JSON is interpreted using Latin-1.
+- Dedicated Unicode serialization and HTTP response-header regression tests
+  protect this behavior; data already remains UTF-8 inside MMDB/serde_json.
 
-## Design/operational requirements
+## Operational limits
 
-- Keep download and schedule logic MaxMind-specific, not inside the REST server
-  or generic MMDB reader.
-- Keep existing API key and IP protections unchanged.
-- Never commit credentials, local `config.toml`, state or downloaded MMDB data.
-- `Cargo.lock` should be committed for reproducible application builds.
-- `Cargo.toml` at the repository root is Cargo workspace configuration;
-  local MaxMind fields go in `config.toml`.
-- Review CI checks/tests on Windows and Linux; actual MaxMind authenticated
-  downloads must be verified on the user's Windows machine with private creds.
+- R3B uses a tiny read/write lock around **Arc pointer assignment**, not
+  a lock-free primitive; no request holds it while decoding the MMDB.
+- External CLI update activation is eventual, bounded by the configured
+  `poll_minutes` scheduler interval (default 60). An explicit CLI run
+  cannot instantly change another running process's in-memory reader.
+- Changing `config.toml` still requires restart; hot reload applies only
+  to database contents, not provider/account configuration.
+- If a file is externally corrupted, a running server keeps its last valid
+  in-memory snapshot, but cold startup with that bad file fails as designed.
+- R3C DB-IP provider, Windows Service/SCM, TLS and management UI are deferred.
 
-## Next
+## Repository workflow
 
-- R3A branch `feature/maxmind-auto-update-r3a`, PR required; no merge without
-  explicit approval.
+- Implement on `feature/maxmind-live-reload-r3b` and open PR to main.
+- User approval required before merge, with practical Windows smoke evidence.
+- Keep `Cargo.lock` pinned and do not commit local `config.toml`,
+  private credentials, MMDB files or update-state JSON.

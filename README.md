@@ -2,7 +2,7 @@
 
 Private Rust HTTP geolocation service; intended for our applications rather than external customers.
 
-This checkpoint supports local MaxMind-compatible City, Country and ASN MMDB files and application-labeled API keys. Database downloads/scheduled updates and Windows SCM integration are separate future checkpoints.
+The service supports authenticated offline City/Country/ASN MMDB lookups, named API keys, scheduled MaxMind downloads and in-process live database activation. Windows SCM integration is a separate future checkpoint.
 
 ## Install / run (PowerShell)
 
@@ -57,8 +57,8 @@ The default listener is **127.0.0.1:19000**, and trusted peers default to loopba
 ## Verification
 
 ```powershell
-cargo check --workspace
-cargo test --workspace
+cargo check --locked --workspace
+cargo test --locked --workspace
 ```
 
 GitHub Actions builds and runs a real secured HTTP smoke test on Windows and Linux. It downloads official synthetic MaxMind test fixtures for verification only.
@@ -121,11 +121,37 @@ New files are downloaded into temporary files, tar.gz contents are validated,
 and only a matching MMDB record is written to the configured destination.
 Existing files remain in place when download or validation fails.
 
-**R3A limitation:** the running API reader remains bound to the previously
-loaded in-memory MMDB after an update. Restart `remvibe-geolocation` to use
-new downloaded data. **R3B** will implement live database reload with no
-interruption to lookups. This checkpoint does not implement DB-IP or the
-Windows Service Control Manager.
+**R3B live activation:** when the running server's own MaxMind scheduler
+downloads an updated MMDB, it loads and validates the candidate into owned
+memory before replacing the on-disk file and atomically switching that
+database's active reader. Requests already using the old reader finish
+normally. City, Country and ASN are swapped independently.
+
+`--check-updates` is a separate CLI process, so it cannot directly modify
+a running server's memory. The running scheduler picks up newer MMDB files
+installed by that command on its next poll (`poll_minutes`, default 60).
+No credentials or extra HTTP admin endpoint are needed for local detection.
+An invalid external file logs an error and leaves the previous in-memory
+reader active; repair the disk file before a server restart. If the download
+or file replacement fails, the old disk and in-memory databases remain active.
+
+R3B does **not** add DB-IP or Windows Service Control Manager integration.
 
 MaxMind documents direct database download behavior and limits at
 https://dev.maxmind.com/geoip/updating-databases/.
+
+## PowerShell UTF-8 JSON compatibility
+
+The service declares `Content-Type: application/json; charset=utf-8` for
+JSON success and error responses. This matters for legacy Windows PowerShell
+5.1, which may otherwise decode UTF-8 response bytes using Latin-1 and
+display `Türkiye` as `TÃ¼rkiye`. The MMDB and JSON payload are UTF-8; the
+HTTP response now advertises the character encoding explicitly.
+
+After updating the code, **restart the server process** to load the header
+change. Test with:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:19000/v1/geoip?ip=88.226.122.192" -Headers @{ "X-API-Key" = $apiKey }
+```
+

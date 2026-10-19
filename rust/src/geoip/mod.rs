@@ -1,4 +1,5 @@
 pub mod maxmind;
+pub mod reader_slot;
 
 use std::{net::IpAddr, sync::Arc};
 
@@ -40,15 +41,22 @@ pub trait GeoProviderAbs: Send + Sync {
 
 pub struct GeoService {
     providers: Vec<Arc<dyn GeoProviderAbs>>,
+    maxmind_readers: Option<Arc<maxmind::MaxMindReaders>>,
 }
 
 impl GeoService {
     pub fn load(config: &GeoConfig) -> Result<Self> {
         let mut providers: Vec<Arc<dyn GeoProviderAbs>> = Vec::new();
+        let mut maxmind_readers = None;
         if let Some(provider) = maxmind::MaxMindProvider::load(&config.maxmind)? {
+            maxmind_readers = Some(provider.live_readers());
             providers.push(Arc::new(provider));
         }
-        Ok(Self { providers })
+        Ok(Self { providers, maxmind_readers })
+    }
+
+    pub fn maxmind_live_readers(&self) -> Option<Arc<maxmind::MaxMindReaders>> {
+        self.maxmind_readers.clone()
     }
 
     pub fn has_providers(&self) -> bool {

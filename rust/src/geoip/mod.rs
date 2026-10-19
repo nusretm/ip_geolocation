@@ -41,43 +41,74 @@ pub trait GeoProviderAbs: Send + Sync {
 }
 
 impl GeoLocation {
-    /// MaxMind is preferred. Only empty attributes are backfilled from the
-    /// next provider; individual ASN fields are never mixed across different
-    /// ASN numbers or potentially unrelated organizations.
+    /// A GeoIP provider's detailed location is a coherent record, not a bag
+    /// of independent fields. Mixing a fallback city with a different source's
+    /// latitude, longitude and time zone can yield impossible combinations.
+    fn location_detail_rank(&self) -> u8 {
+        if self.city.is_some() {
+            4
+        } else if self.region.is_some() || self.postal_code.is_some() {
+            3
+        } else if self.latitude.is_some() && self.longitude.is_some() {
+            2
+        } else if self.latitude.is_some() || self.longitude.is_some() || self.time_zone.is_some() {
+            1
+        } else {
+            0
+        }
+    }
+
     fn fill_missing(&mut self, next: GeoLocation) {
-        let mut new_location = false;
-        // Refuse contradictory country records. A city/coordinate from another
-        // country must not be combined with MaxMind's country.
+        // Explicitly reject different countries, or an unknown fallback
+        // country when the preferred provider already identified one.
         let compatible_country = match (&self.country_code, &next.country_code) {
-            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-            _ => true,
+            (Some(first), Some(second)) => first.eq_ignore_ascii_case(second),
+            (Some(_), None) => false,
+            (None, _) => match (&self.country, &next.country) {
+                (Some(first), Some(second)) => first.eq_ignore_ascii_case(second),
+                _ => true,
+            },
         };
-        macro_rules! fill {
-            ($field:ident) => {
-                if self.$field.is_none() && next.$field.is_some() {
-                    self.$field = next.$field;
-                    new_location = true;
-                }
-            };
-        }
+
         if compatible_country {
-            fill!(country_code);
-            fill!(country);
-            fill!(city);
-            fill!(region);
-            fill!(postal_code);
-            fill!(latitude);
-            fill!(longitude);
-            fill!(time_zone);
-        }
-        if new_location {
-            self.sources.location = match (self.sources.location, next.sources.location) {
-                (Some("maxmind"), Some("dbip")) => Some("maxmind+dbip"),
-                (existing, Some("dbip")) if existing != Some("dbip") => Some("dbip"),
-                (existing, _) => existing,
-            };
+            let mut used_fallback = false;
+
+            // Country identity can be filled independently of the city-level
+            // geolocation, but never overwritten when already known.
+            if self.country_code.is_none() && next.country_code.is_some() {
+                self.country_code = next.country_code.clone();
+                used_fallback = true;
+            }
+            if self.country.is_none() && next.country.is_some() {
+                self.country = next.country.clone();
+                used_fallback = true;
+            }
+
+            // Prefer MaxMind at equal precision. If DB-IP has a more specific
+            // location (e.g. City vs MaxMind's country-centroid coordinates),
+            // replace the *entire* detailed record. Do not keep stale
+            // coordinates, postal code or time zone from the previous source.
+            if next.location_detail_rank() > self.location_detail_rank() {
+                self.city = next.city;
+                self.region = next.region;
+                self.postal_code = next.postal_code;
+                self.latitude = next.latitude;
+                self.longitude = next.longitude;
+                self.time_zone = next.time_zone;
+                used_fallback = true;
+            }
+
+            if used_fallback {
+                self.sources.location = match (self.sources.location, next.sources.location) {
+                    (Some("maxmind"), Some("dbip")) => Some("maxmind+dbip"),
+                    (_, Some(source)) => Some(source),
+                    (existing, None) => existing,
+                };
+            }
         }
 
+        // ASN is independent of geographic position. Only extend an existing
+        // ASN organization if both providers agree on its ASN number.
         if let Some(incoming) = next.asn {
             match self.asn.as_mut() {
                 None => {
@@ -165,7 +196,7 @@ mod merge_tests {
             ..GeoLocation::default()
         };
         let dbip = GeoLocation {
-            ip: "8.8.8.8".into(), country: Some("USA".into()),
+            ip: "8.8.8.8".into(), country_code: Some("US".into()), country: Some("USA".into()),
             city: Some("Mountain View".into()),
             sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
             ..GeoLocation::default()
@@ -192,6 +223,140 @@ mod merge_tests {
         });
         assert!(first.city.is_none());
         assert_eq!(first.sources.location, Some("maxmind"));
+    }
+
+    #[test]
+    fn more_specific_dbip_city_replaces_entire_maxmind_centroid_profile() {
+        // This reproduces the real Windows service observation for 8.8.8.8:
+        // combining Mountain View with a MaxMind US centroid yielded
+        // coordinates far away from California and a Chicago time zone.
+        let mut maxmind = GeoLocation {
+            ip: "8.8.8.8".into(),
+            country_code: Some("US".into()),
+            country: Some("United States".into()),
+            latitude: Some(37.751),
+            longitude: Some(-97.822),
+            time_zone: Some("America/Chicago".into()),
+            postal_code: None,
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        let dbip = GeoLocation {
+            ip: "8.8.8.8".into(),
+            country_code: Some("US".into()),
+            country: Some("United States".into()),
+            city: Some("Mountain View".into()),
+            region: Some("California".into()),
+            latitude: Some(37.422),
+            longitude: Some(-122.085),
+            time_zone: None,
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+
+        maxmind.fill_missing(dbip);
+        assert_eq!(maxmind.city.as_deref(), Some("Mountain View"));
+        assert_eq!(maxmind.region.as_deref(), Some("California"));
+        assert_eq!(maxmind.latitude, Some(37.422));
+        assert_eq!(maxmind.longitude, Some(-122.085));
+        assert_eq!(maxmind.time_zone, None); // No stale Chicago time zone.
+        assert_eq!(maxmind.country_code.as_deref(), Some("US"));
+        assert_eq!(maxmind.sources.location, Some("maxmind+dbip"));
+    }
+
+    #[test]
+    fn maxmind_city_remains_authoritative_even_if_dbip_has_missing_coordinates() {
+        let mut maxmind = GeoLocation {
+            country_code: Some("US".into()),
+            country: Some("United States".into()),
+            city: Some("Seattle".into()),
+            region: Some("Washington".into()),
+            postal_code: Some("98101".into()),
+            time_zone: Some("America/Los_Angeles".into()),
+            latitude: None,
+            longitude: None,
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        let dbip = GeoLocation {
+            country_code: Some("US".into()),
+            city: Some("Mountain View".into()),
+            region: Some("California".into()),
+            latitude: Some(37.422),
+            longitude: Some(-122.085),
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        maxmind.fill_missing(dbip);
+        assert_eq!(maxmind.city.as_deref(), Some("Seattle"));
+        assert_eq!(maxmind.region.as_deref(), Some("Washington"));
+        assert_eq!(maxmind.postal_code.as_deref(), Some("98101"));
+        assert_eq!(maxmind.latitude, None); // Do not attach a different city's coordinates.
+        assert_eq!(maxmind.longitude, None);
+        assert_eq!(maxmind.time_zone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(maxmind.sources.location, Some("maxmind"));
+    }
+
+    #[test]
+    fn inconsistent_country_cannot_replace_location_profile_even_if_more_precise() {
+        let mut maxmind = GeoLocation {
+            country_code: Some("TR".into()), country: Some("Türkiye".into()),
+            latitude: Some(39.0), longitude: Some(35.0),
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        let dbip = GeoLocation {
+            country_code: Some("US".into()), country: Some("United States".into()),
+            city: Some("Mountain View".into()), region: Some("California".into()),
+            latitude: Some(37.422), longitude: Some(-122.085),
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        maxmind.fill_missing(dbip);
+        assert!(maxmind.city.is_none());
+        assert_eq!(maxmind.latitude, Some(39.0));
+        assert_eq!(maxmind.longitude, Some(35.0));
+        assert_eq!(maxmind.sources.location, Some("maxmind"));
+    }
+
+    #[test]
+    fn country_only_maxmind_can_gain_complete_dbip_city_record() {
+        let mut maxmind = GeoLocation {
+            country_code: Some("US".into()), country: Some("United States".into()),
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        let dbip = GeoLocation {
+            country_code: Some("US".into()), city: Some("Mountain View".into()),
+            region: Some("California".into()),
+            latitude: Some(37.422), longitude: Some(-122.085),
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        maxmind.fill_missing(dbip);
+        assert_eq!(maxmind.city.as_deref(), Some("Mountain View"));
+        assert_eq!(maxmind.latitude, Some(37.422));
+        assert_eq!(maxmind.longitude, Some(-122.085));
+        assert_eq!(maxmind.sources.location, Some("maxmind+dbip"));
+    }
+
+    #[test]
+    fn unknown_dbip_country_does_not_override_known_maxmind_location() {
+        let mut maxmind = GeoLocation {
+            country_code: Some("US".into()), latitude: Some(37.751),
+            longitude: Some(-97.822),
+            sources: GeoSources { location: Some("maxmind"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        };
+        maxmind.fill_missing(GeoLocation {
+            country_code: None,
+            city: Some("Unknown".into()), latitude: Some(10.0), longitude: Some(20.0),
+            sources: GeoSources { location: Some("dbip"), ..GeoSources::default() },
+            ..GeoLocation::default()
+        });
+        assert!(maxmind.city.is_none());
+        assert_eq!(maxmind.latitude, Some(37.751));
+        assert_eq!(maxmind.sources.location, Some("maxmind"));
     }
 
     #[test]

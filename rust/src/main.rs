@@ -3,17 +3,39 @@ mod geoip;
 mod security;
 mod server;
 
+#[cfg(windows)]
+mod windows_service;
+
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing::info;
+
+#[derive(Debug, Clone, Subcommand)]
+enum ServiceCommand {
+    /// Register an automatic, delayed-start Windows Service (admin required).
+    Install,
+    /// Remove the registered Windows Service (admin required).
+    Uninstall,
+    /// Request service startup from Windows SCM.
+    Start,
+    /// Request graceful shutdown from Windows SCM.
+    Stop,
+    /// Display SCM state and process ID.
+    Status,
+    /// Internal SCM entry point; do not invoke interactively.
+    Run,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "remvibe-geolocation", version, about = "Private GeoLocation HTTP service")]
 struct Cli {
-    #[arg(long, default_value = "config.toml", value_name = "FILE")]
+    #[arg(long, default_value = "config.toml", value_name = "FILE", global = true)]
     config: PathBuf,
+
+    #[command(subcommand)]
+    service: Option<ServiceCommand>,
 
     #[arg(long = "api-key", visible_alias = "new-api-key", conflicts_with_all = ["delete_api_key", "api_key_list"])]
     api_key: bool,
@@ -36,11 +58,31 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    if let Some(action) = cli.service.as_ref() {
+        #[cfg(windows)]
+        {
+            return match action {
+                ServiceCommand::Install => windows_service::management::install(&cli.config),
+                ServiceCommand::Uninstall => windows_service::management::uninstall(),
+                ServiceCommand::Start => windows_service::management::start(),
+                ServiceCommand::Stop => windows_service::management::stop(),
+                ServiceCommand::Status => windows_service::management::status(),
+                ServiceCommand::Run => windows_service::runtime::dispatch(cli.config.clone()),
+            };
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = action;
+            bail!("Windows Service management is supported only on Windows");
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let cli = Cli::parse();
     let config = config::Config::load(&cli.config)?;
 
     if cli.api_key {

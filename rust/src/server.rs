@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::{config::Config, geoip::{maxmind::update::MaxMindUpdater, GeoService}, security};
+use crate::{config::Config, geoip::{dbip::update::DbIpUpdater, maxmind::update::MaxMindUpdater, GeoService}, security};
 
 #[derive(Clone)]
 struct AppState {
@@ -40,13 +40,35 @@ async fn lookup_geoip(State(state): State<AppState>, Query(query): Query<GeoQuer
         return deny(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable");
     }
     match state.geoip.lookup(ip) {
-        Ok(Some(location)) => Json(serde_json::to_value(location).unwrap_or(Value::Null)).into_response(),
+        Ok(Some(location)) => {
+            let has_dbip = location.uses_dbip();
+            let mut response = Json(serde_json::to_value(location).unwrap_or(Value::Null)).into_response();
+            if has_dbip {
+                response.headers_mut().insert(
+                    "X-Data-Attribution",
+                    HeaderValue::from_static("IP Geolocation by DB-IP; https://db-ip.com; CC BY 4.0"),
+                );
+            }
+            response
+        },
         Ok(None) => deny(StatusCode::NOT_FOUND, "ip_not_found"),
         Err(error) => {
             warn!(error = %error, "IP lookup failed");
             deny(StatusCode::INTERNAL_SERVER_ERROR, "lookup_failed")
         }
     }
+}
+
+async fn attribution() -> Json<Value> {
+    Json(json!({
+        "dbip": {
+            "name": "DB-IP",
+            "credit": "IP Geolocation by DB-IP",
+            "url": "https://db-ip.com",
+            "license": "CC BY 4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/"
+        }
+    }))
 }
 
 fn deny(code: StatusCode, message: &'static str) -> Response {
@@ -111,6 +133,7 @@ fn router(state: AppState) -> Router {
         .route("/", get(hello))
         .route("/v1/health", get(hello))
         .route("/v1/geoip", get(lookup_geoip))
+        .route("/v1/attribution", get(attribution))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .layer(middleware::map_response(declare_json_utf8))
         .with_state(state)
@@ -133,9 +156,31 @@ pub async fn serve(config: Config) -> Result<()> {
             }
         }
     }
+    // DB-IP manages its own monthly, unauthenticated Lite publications.
+    let dbip_updater = if config.providers.dbip.updates.enabled {
+        Some(DbIpUpdater::new(&config.providers.dbip)?)
+    } else {
+        None
+    };
+    if let Some(updater) = &dbip_updater {
+        if updater.any_missing() {
+            let result = updater.check_once(true).await?;
+            if result.failures() != 0 {
+                warn!("Some initial DB-IP database downloads failed");
+            }
+        }
+    }
+
     let geoip = Arc::new(GeoService::load(&config.providers).context("Could not initialize GeoIP provider")?);
     if let Some(updater) = updater {
         let updater = match geoip.maxmind_live_readers() {
+            Some(readers) => updater.with_live_readers(readers),
+            None => updater,
+        };
+        tokio::spawn(async move { updater.run_scheduler().await });
+    }
+    if let Some(updater) = dbip_updater {
+        let updater = match geoip.dbip_live_readers() {
             Some(readers) => updater.with_live_readers(readers),
             None => updater,
         };

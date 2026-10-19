@@ -7,8 +7,11 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
 - R1 PR #1, R2 PR #2, R3A PR #3 merged into `main` (R3A commit `573ddcf`).
 - Local Windows user evidence: actual MaxMind City, Country and ASN downloads,
   a second metadata check returned all three `up-to-date`, 0 failures.
-- Local `cargo check --locked --workspace` and `cargo test --locked --workspace`
-  passed, 14 tests. CI also previously passed Linux and Windows.
+- R3B local Windows evidence: authenticated HTTP live-MMDB swap and corrupt-MMDB protection,
+  `cargo test --locked --workspace` **15/15 passed**; local check exposed only
+  test-helper `dead_code` warnings, now limited to test builds.
+- R3B CI Linux/Windows completed 15/15 tests plus secured REST smoke checks on the
+  earlier PR revision. Encoding regression CI is pending after the latest fix.
 
 ## Approved R3B work
 
@@ -29,6 +32,15 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
 - Test on Windows/Linux with official synthetic MMDB files, including an
   authenticated running HTTP server, concurrent lookups, successful City reader
   replacement and rejection of corrupt MMDB.
+
+## HTTP JSON encoding compatibility
+
+- The running Axum REST API marks JSON content type explicitly as
+  `application/json; charset=utf-8` on both successful responses and JSON
+  authentication/error responses; this corrects the `TÃ¼rkiye` display seen
+  in Windows PowerShell 5.1 when UTF-8 JSON is interpreted using Latin-1.
+- Dedicated Unicode serialization and HTTP response-header regression tests
+  protect this behavior; data already remains UTF-8 inside MMDB/serde_json.
 
 ## Operational limits
 

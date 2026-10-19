@@ -27,8 +27,11 @@ struct Cli {
     #[arg(long = "api-key-list")]
     api_key_list: bool,
 
-    #[arg(long = "check-updates", conflicts_with_all = ["api_key", "api_key_list", "delete_api_key"])]
+    #[arg(long = "check-updates", conflicts_with_all = ["api_key", "api_key_list", "delete_api_key", "check_dbip_updates"])]
     check_updates: bool,
+
+    #[arg(long = "check-dbip-updates", conflicts_with_all = ["api_key", "api_key_list", "delete_api_key", "check_updates"])]
+    check_dbip_updates: bool,
 }
 
 #[tokio::main]
@@ -77,6 +80,16 @@ async fn main() -> Result<()> {
         report.print_summary();
         if report.failures() != 0 {
             bail!("One or more MaxMind update operations failed");
+        }
+        return Ok(());
+    }
+
+    if cli.check_dbip_updates {
+        let updater = geoip::dbip::update::DbIpUpdater::new(&config.providers.dbip)?;
+        let report = updater.check_once(true).await?;
+        report.print_summary();
+        if report.failures() != 0 {
+            bail!("One or more DB-IP Lite update operations failed");
         }
         return Ok(());
     }

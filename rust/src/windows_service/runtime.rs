@@ -126,8 +126,22 @@ async fn run_async(
     loop {
         tokio::select! {
             ready = &mut ready_rx => {
-                ready.context("Server terminated before it opened its HTTP listener")?;
-                break;
+                match ready {
+                    Ok(()) => break,
+                    Err(_) => {
+                        // A failed TCP bind drops the readiness sender. Join
+                        // the server task to preserve the real I/O error
+                        // (e.g. Windows 10048 / address already in use)
+                        // instead of reporting only "channel closed".
+                        let outcome = (&mut server_task).await
+                            .context("HTTP task failed during service startup")?;
+                        return match outcome {
+                            Ok(()) if *stopped.borrow() => Ok(()),
+                            Ok(()) => Err(anyhow!("HTTP server exited before opening its listening socket")),
+                            Err(error) => Err(error.context("HTTP server failed before listener readiness")),
+                        };
+                    }
+                }
             }
             result = &mut server_task => {
                 return result.context("HTTP task failed during service startup")?;

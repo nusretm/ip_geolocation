@@ -91,11 +91,15 @@ async fn authorize(
         return deny(StatusCode::FORBIDDEN, "forbidden");
     };
 
-    if !security::is_trusted(peer, &state.trusted_networks) {
-        warn!(peer = %peer, "Request denied by trusted IP policy");
-        return deny(StatusCode::FORBIDDEN, "forbidden");
+    // The real TCP peer allowlist is an independent authorization path.
+    // A trusted client needs no API key, even if it supplies an invalid key.
+    // Never use user-controlled X-Forwarded-For / X-Real-IP for this decision.
+    if security::is_trusted(peer, &state.trusted_networks) {
+        return next.run(request).await;
     }
 
+    // Other peers must present a valid API key. A valid key is enough even
+    // if the peer address does not appear in the trusted list.
     let key = request
         .headers()
         .get("x-api-key")
@@ -340,6 +344,80 @@ mod tests {
         assert!(std::str::from_utf8(&bytes).unwrap().contains("Türkiye"));
     }
 
+    #[tokio::test]
+    async fn real_tcp_peer_allows_trusted_ip_or_valid_api_key_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("api_keys.json");
+        let key = security::create_api_key(&key_path, "R5 authorization").unwrap();
+        let geoip = Arc::new(GeoService::load(&Config::default().providers).unwrap());
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(3)).build().unwrap();
+
+        // Real TCP loopback is explicitly allowlisted, with or without a key.
+        let trusted_app = router(AppState {
+            trusted_networks: Arc::new(vec!["127.0.0.1/32".parse().unwrap()]),
+            key_file: key_path.clone(),
+            geoip: geoip.clone(),
+        });
+        let trusted_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let trusted_url = format!("http://{}/v1/health", trusted_listener.local_addr().unwrap());
+        let trusted_server = tokio::spawn(async move {
+            axum::serve(trusted_listener, trusted_app.into_make_service_with_connect_info::<SocketAddr>())
+                .await.unwrap();
+        });
+        let keyless = client.get(&trusted_url).send().await.unwrap();
+        assert_eq!(keyless.status(), reqwest::StatusCode::OK);
+        let invalid_key = client.get(&trusted_url)
+            .header("X-API-Key", "invalid-key").send().await.unwrap();
+        assert_eq!(invalid_key.status(), reqwest::StatusCode::OK);
+
+        // The same physical 127.0.0.1 peer is deliberately NOT in this
+        // server's allowlist. It can enter ONLY with a valid API key.
+        let untrusted_app = router(AppState {
+            trusted_networks: Arc::new(vec!["192.0.2.100/32".parse().unwrap()]),
+            key_file: key_path.clone(),
+            geoip,
+        });
+        let untrusted_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let untrusted_url = format!("http://{}/v1/health", untrusted_listener.local_addr().unwrap());
+        let untrusted_server = tokio::spawn(async move {
+            axum::serve(untrusted_listener, untrusted_app.into_make_service_with_connect_info::<SocketAddr>())
+                .await.unwrap();
+        });
+        let missing = client.get(&untrusted_url).send().await.unwrap();
+        assert_eq!(missing.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let invalid = client.get(&untrusted_url)
+            .header("X-API-Key", "invalid-key").send().await.unwrap();
+        assert_eq!(invalid.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let spoofed = client.get(&untrusted_url)
+            .header("X-Forwarded-For", "192.0.2.100")
+            .header("X-Real-IP", "192.0.2.100")
+            .send().await.unwrap();
+        assert_eq!(spoofed.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        let authorized = client.get(&untrusted_url)
+            .header("X-API-Key", &key).send().await.unwrap();
+        assert_eq!(authorized.status(), reqwest::StatusCode::OK);
+
+        // Revocation affects key-authorized peers immediately but never
+        // revokes the separate, configured trusted-TCP-IP privilege.
+        assert!(security::delete_api_key(&key_path, &key).unwrap());
+        let revoked = client.get(&untrusted_url)
+            .header("X-API-Key", &key).send().await.unwrap();
+        assert_eq!(revoked.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(client.get(&trusted_url).send().await.unwrap().status(), reqwest::StatusCode::OK);
+
+        // A broken key store must fail closed for untrusted peers. Trusted
+        // peers still work because they do not need key-store access.
+        std::fs::write(&key_path, b"not-json").unwrap();
+        let broken_store = client.get(&untrusted_url)
+            .header("X-API-Key", &key).send().await.unwrap();
+        assert_eq!(broken_store.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(client.get(&trusted_url).send().await.unwrap().status(), reqwest::StatusCode::OK);
+
+        trusted_server.abort();
+        untrusted_server.abort();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn authenticated_http_keeps_serving_during_city_swap_and_corrupt_replacement() {
         let (Ok(original), Ok(alternate)) = (
@@ -428,10 +506,11 @@ mod tests {
         requests.await.unwrap();
         let last = client.get(&endpoint).header("X-API-Key", &key).send().await.unwrap();
         assert!(matches!(last.status(), reqwest::StatusCode::OK | reqwest::StatusCode::NOT_FOUND));
-        let unauthorized = client.get(&endpoint).send().await.unwrap();
-        assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+        // This client's real TCP peer is loopback (trusted); no key needed.
+        let trusted_keyless = client.get(&endpoint).send().await.unwrap();
+        assert!(matches!(trusted_keyless.status(), reqwest::StatusCode::OK | reqwest::StatusCode::NOT_FOUND));
         assert_eq!(
-            unauthorized.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            trusted_keyless.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
             "application/json; charset=utf-8",
         );
         running.abort();

@@ -13,7 +13,8 @@ use tar::Archive;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 
-use super::{schedule::DatabaseKind, MaxMindReaders};
+use super::{database_from_bytes, schedule::DatabaseKind, MaxMindReaders};
+use crate::geoip::reader_slot::DatabaseFingerprint;
 
 const CDN_HOST: &str = "mm-prod-geoip-databases.a2649acb697e2c09b632799562c076f2.r2.cloudflarestorage.com";
 const MAX_COMPRESSED_BYTES: u64 = 200 * 1024 * 1024;
@@ -140,6 +141,7 @@ fn validate_entry_path(path: &Path, edition: &str) -> bool {
 pub struct DatabaseCandidate {
     file: NamedTempFile,
     reader: Reader<Vec<u8>>,
+    fingerprint: DatabaseFingerprint,
 }
 
 impl DatabaseCandidate {
@@ -159,7 +161,7 @@ impl DatabaseCandidate {
             .map_err(|error| error.error)
             .context("Cannot atomically replace MMDB destination")?;
         if let Some(live) = live {
-            live.activate(kind, self.reader)?;
+            live.activate(kind, self.reader, self.fingerprint)?;
         }
         Ok(epoch)
     }
@@ -197,16 +199,9 @@ fn extract_mmdb(archive_path: &Path, destination: &Path, edition: &str, kind: Da
     }
     extracted.flush()?;
     extracted.as_file().sync_all()?;
-    let reader = Reader::open_readfile(extracted.path())
-        .context("Downloaded MaxMind MMDB could not be opened")?;
-    if !reader.metadata.database_type.contains(kind.expected_type()) {
-        bail!("Downloaded MaxMind database edition/type mismatch");
-    }
-    let build_epoch = reader.metadata.build_epoch;
-    if build_epoch == 0 {
-        bail!("Downloaded MaxMind MMDB has invalid build epoch");
-    }
-    Ok(DatabaseCandidate { file: extracted, reader })
+    let bytes = std::fs::read(extracted.path()).context("Cannot load extracted MaxMind MMDB bytes")?;
+    let (reader, fingerprint) = database_from_bytes(bytes, kind.expected_type())?;
+    Ok(DatabaseCandidate { file: extracted, reader, fingerprint })
 }
 
 pub async fn download_candidate(
@@ -301,7 +296,8 @@ mod tests {
         assert!(candidate.file.path().metadata().unwrap().len() > 0);
 
         let live = MaxMindReaders::default();
-        live.activate(DatabaseKind::City, Reader::open_readfile(&std::env::var("MAXMIND_TEST_MMDB_PATH").unwrap()).unwrap()).unwrap();
+        let (original_reader, original_fingerprint) = database_from_bytes(fixture_bytes, "City").unwrap();
+        live.activate(DatabaseKind::City, original_reader, original_fingerprint).unwrap();
         let current_epoch = live.active_build_epoch(DatabaseKind::City);
         let invalid_target = directory.path().join("occupied-directory");
         std::fs::create_dir_all(&invalid_target).unwrap();

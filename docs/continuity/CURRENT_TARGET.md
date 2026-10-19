@@ -63,8 +63,9 @@ failed listener bind must never permanently disable the service.
   REST API; stop; hold the target TCP port; start again, observe
   `START_PENDING`, release port, observe `RUNNING` and HTTP recovery;
   finally stop/uninstall and verify diagnostics log.
-- User live Windows elevation smoke for install/start/stop and ideally
-  reboot/auto-start proof before PR merge.
+- User live Windows elevation smoke for install/start/stop, PID-matched
+  HTTP and network/port recovery. Actual reboot/autostart smoke is deferred
+  at the user's request and is not required for R4 merge.
 
 ## R4 automated verification — 2026-10-19
 
@@ -156,11 +157,15 @@ failed listener bind must never permanently disable the service.
   (Windows and Ubuntu), including native SCM installation and port recovery.
   CI: https://github.com/nusretm/ip_geolocation/actions/runs/39318023050
   and https://github.com/nusretm/ip_geolocation/actions/runs/39318016043 .
-- **Still unverified:** Windows *reboot* automatic startup under real
-  early-boot network conditions. The service's TCP port-conflict
-  recovery and SCM restart behavior are verified, but an actual reboot
-  and post-boot check remain separate acceptance evidence.
-  No merge of R4 PR #6 without explicit user approval.
+- **User acceptance decision:** reboot validation is **deferred**, not a
+  merge blocker. Windows Service is confirmed `Running`, PID `28416`
+  owns `127.0.0.1:19000`, `sc.exe queryex` reports exit code 0, and
+  the real authenticated GeoIP API works. TCP port-conflict recovery
+  and SCM automatic recovery were exercised. No reboot performed;
+  automatic delayed-start after reboot remains **unverified**, and will
+  be investigated if a real future restart exposes a problem.
+- R4 may proceed to merge review on this verified operating baseline,
+  still requiring **explicit user approval before PR #6 merge**.
 
 ## Risks / constraints
 

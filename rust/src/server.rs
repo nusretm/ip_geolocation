@@ -45,7 +45,7 @@ async fn lookup_geoip(State(state): State<AppState>, Query(query): Query<GeoQuer
             let mut response = Json(serde_json::to_value(location).unwrap_or(Value::Null)).into_response();
             if has_dbip {
                 response.headers_mut().insert(
-                    "X-Data-Attribution",
+                    "x-data-attribution",
                     HeaderValue::from_static("IP Geolocation by DB-IP; https://db-ip.com; CC BY 4.0"),
                 );
             }

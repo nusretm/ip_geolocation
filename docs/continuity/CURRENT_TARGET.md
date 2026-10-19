@@ -57,7 +57,42 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
   Missing postal code and time zone remained null as expected for DB-IP Lite.
 - The latest PR #5 push and pull-request GitHub Actions checks for `fc656ce`
   both succeeded on Windows and Linux.
-- PR #5 remains **draft**. No merge without user's explicit approval.
+- Historical at R3C preparation: PR #5 was draft pending approval. PR #5 subsequently merged to main as `cc46776`.
+
+## Follow-up fix — coherent location fallback (2026-10-19)
+
+- **User-approved standalone follow-up to R3C**, tracked on
+  `fix/geoip-coherent-location-fallback` with its own PR targeting main.
+  R4 Windows Service branch/PR #6 remains independent and unmerged.
+- User's genuine Windows R4 service HTTP response for `8.8.8.8` returned
+  city `Mountain View` / region `California` from DB-IP while keeping
+  MaxMind's general US coordinates `37.751,-97.822` and
+  `America/Chicago`. `sources.location=maxmind+dbip` accurately signaled
+  two providers but the resulting geographic combination was incoherent.
+- Root cause: R3C `GeoLocation::fill_missing` treated City, Region, Postcode,
+  Latitude, Longitude and Time Zone as independent nullable fields.
+- Fix: treat those **six detailed location fields as a single provider-owned
+  profile**. Prefer MaxMind at equal detail; replace its *whole* detail profile
+  if DB-IP has demonstrably greater specificity (city > region/postcode >
+  full coordinates > partial/time zone > none). Country code and country name
+  can be filled independently **only when geographic countries agree**;
+  reject any cross-provider geographic fallback when the known country
+  codes disagree or DB-IP has no country code but MaxMind does. ASN remains
+  independent and preserves number/organization agreement checks.
+- Full profile replacement clears values unsupported by the newly selected
+  provider: e.g. a DB-IP Mountain View City replaces MaxMind's US centroid
+  coordinate and `America/Chicago` time zone with DB-IP coordinates and a
+  null time zone. This intentionally favors coherent data over superficially
+  filling every JSON field.
+- Added focused regression tests for exact observed `8.8.8.8` mismatch,
+  MaxMind-city preservation when its coordinates are null, countries
+  disagreeing, country-only MaxMind with DB-IP City, and unknown fallback
+  country. Existing maxmind-priority and ASN consistency tests remain.
+- Preserve API schema and authenticated routes; do not modify Windows Service
+  infrastructure or provider updater behavior; no Git secrets/MMDB.
+- Pending: CI cross-platform proof, actual Windows local two-provider smoke,
+  explicit user merge approval. Merge into `main` before integrating into
+  R4 branch.
 
 ## Deferred / constraints
 

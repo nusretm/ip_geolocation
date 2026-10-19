@@ -16,7 +16,7 @@ pub struct MaxMindProvider {
 fn open_database(path: &std::path::Path, edition: &str) -> Result<Reader<Vec<u8>>> {
     let reader = Reader::open_readfile(path)
         .with_context(|| format!("Unable to read {edition} MMDB: {}", path.display()))?;
-    let database_type = &reader.metadata().database_type;
+    let database_type = &reader.metadata.database_type;
     if !database_type.contains(edition) {
         bail!("Expected {edition} database at {}, found {database_type}", path.display());
     }

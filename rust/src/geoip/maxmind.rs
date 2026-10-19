@@ -1,3 +1,7 @@
+pub mod download;
+pub mod schedule;
+pub mod update;
+
 use std::net::IpAddr;
 
 use anyhow::{bail, Context, Result};

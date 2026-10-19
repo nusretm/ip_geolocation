@@ -14,3 +14,23 @@ api_keys_file = "data/api_keys.json"
 # city = "data/databases/GeoLite2-City.mmdb"
 # country = "data/databases/GeoLite2-Country.mmdb"
 # asn = "data/databases/GeoLite2-ASN.mmdb"
+
+# MaxMind downloader (R3A): choose which database(s) to manage using the
+# uncommented city/country/asn paths above. Paths are relative to config.toml.
+# Credentials can be configured here, but environment variables are preferred:
+#   MAXMIND_ACCOUNT_ID, MAXMIND_LICENSE_KEY
+# account_id = 123456
+# license_key = "YOUR_SECRET"
+# account_id_env = "MAXMIND_ACCOUNT_ID"
+# license_key_env = "MAXMIND_LICENSE_KEY"
+# city_edition = "GeoLite2-City"
+# country_edition = "GeoLite2-Country"
+# asn_edition = "GeoLite2-ASN"
+
+[providers.maxmind.updates]
+enabled = false               # set true to enable background updates
+check_on_start = true
+poll_minutes = 60             # scheduler wake frequency
+release_check_hours = 4       # publish weekdays (per database)
+other_check_hours = 24        # out-of-schedule checks
+state_file = "data/updates/maxmind.json"

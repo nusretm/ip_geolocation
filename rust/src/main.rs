@@ -5,7 +5,7 @@ mod server;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use tracing::info;
 
@@ -26,6 +26,9 @@ struct Cli {
 
     #[arg(long = "api-key-list")]
     api_key_list: bool,
+
+    #[arg(long = "check-updates", conflicts_with_all = ["api_key", "api_key_list", "delete_api_key"])]
+    check_updates: bool,
 }
 
 #[tokio::main]
@@ -64,6 +67,16 @@ async fn main() -> Result<()> {
                 println!("{:<26} {:<21} {}", key.name, key.id,
                     key.created_at_unix.map(|value| value.to_string()).unwrap_or_else(|| "-".into()));
             }
+        }
+        return Ok(());
+    }
+
+    if cli.check_updates {
+        let updater = geoip::maxmind::update::MaxMindUpdater::new(&config.providers.maxmind)?;
+        let report = updater.check_once(true).await?;
+        report.print_summary();
+        if report.failures() != 0 {
+            bail!("One or more MaxMind update operations failed");
         }
         return Ok(());
     }

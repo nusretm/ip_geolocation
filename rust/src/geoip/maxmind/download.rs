@@ -13,7 +13,7 @@ use tar::Archive;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 
-use super::schedule::DatabaseKind;
+use super::{schedule::DatabaseKind, MaxMindReaders};
 
 const CDN_HOST: &str = "mm-prod-geoip-databases.a2649acb697e2c09b632799562c076f2.r2.cloudflarestorage.com";
 const MAX_COMPRESSED_BYTES: u64 = 200 * 1024 * 1024;
@@ -137,7 +137,35 @@ fn validate_entry_path(path: &Path, edition: &str) -> bool {
     }
 }
 
-fn extract_mmdb(archive_path: &Path, destination: &Path, edition: &str, kind: DatabaseKind) -> Result<(NamedTempFile, u64)> {
+pub struct DatabaseCandidate {
+    file: NamedTempFile,
+    reader: Reader<Vec<u8>>,
+}
+
+impl DatabaseCandidate {
+    pub fn build_epoch(&self) -> u64 {
+        self.reader.metadata.build_epoch
+    }
+
+    pub fn install(self, target: &Path, kind: DatabaseKind, live: Option<&MaxMindReaders>) -> Result<u64> {
+        let epoch = self.build_epoch();
+        if !self.reader.metadata.database_type.contains(kind.expected_type()) {
+            bail!("Cannot install MMDB of the wrong type");
+        }
+        // Persist first; if the filesystem rejects the replacement the active
+        // reader remains untouched. Reader<Vec<u8>> owns its bytes, not a file
+        // descriptor, so Windows can replace the existing database file.
+        self.file.persist(target)
+            .map_err(|error| error.error)
+            .context("Cannot atomically replace MMDB destination")?;
+        if let Some(live) = live {
+            live.activate(kind, self.reader)?;
+        }
+        Ok(epoch)
+    }
+}
+
+fn extract_mmdb(archive_path: &Path, destination: &Path, edition: &str, kind: DatabaseKind) -> Result<DatabaseCandidate> {
     let input = File::open(archive_path).context("Cannot open downloaded MaxMind archive")?;
     let mut archive = Archive::new(GzDecoder::new(input));
     let parent = destination.parent().context("MMDB destination needs a parent directory")?;
@@ -178,16 +206,16 @@ fn extract_mmdb(archive_path: &Path, destination: &Path, edition: &str, kind: Da
     if build_epoch == 0 {
         bail!("Downloaded MaxMind MMDB has invalid build epoch");
     }
-    Ok((extracted, build_epoch))
+    Ok(DatabaseCandidate { file: extracted, reader })
 }
 
-pub async fn download_and_install(
+pub async fn download_candidate(
     client: &Client,
     edition: &str,
     kind: DatabaseKind,
     target: &Path,
     credentials: &Credentials,
-) -> Result<u64> {
+) -> Result<DatabaseCandidate> {
     let response = request(client, Method::GET, edition, credentials).await?;
     if response.content_length().is_some_and(|length| length > MAX_COMPRESSED_BYTES) {
         bail!("MaxMind archive exceeds allowed size");
@@ -216,11 +244,7 @@ pub async fn download_and_install(
     let edition_owned = edition.to_owned();
     let destination = target.to_owned();
     tokio::task::spawn_blocking(move || {
-        let (database, epoch) = extract_mmdb(archive.path(), &destination, &edition_owned, kind)?;
-        database.persist(&destination)
-            .map_err(|error| error.error)
-            .context("Cannot atomically replace MMDB destination")?;
-        Ok(epoch)
+        extract_mmdb(archive.path(), &destination, &edition_owned, kind)
     }).await.context("MaxMind unpack worker panicked")?
 }
 
@@ -272,9 +296,18 @@ mod tests {
         builder.into_inner().unwrap().finish().unwrap();
 
         let target = directory.path().join("City.mmdb");
-        let (temp, epoch) = extract_mmdb(&archive_path, &target, "GeoIP2-City", DatabaseKind::City).unwrap();
-        assert!(epoch > 0);
-        assert!(temp.path().metadata().unwrap().len() > 0);
+        let candidate = extract_mmdb(&archive_path, &target, "GeoIP2-City", DatabaseKind::City).unwrap();
+        assert!(candidate.build_epoch() > 0);
+        assert!(candidate.file.path().metadata().unwrap().len() > 0);
+
+        let live = MaxMindReaders::default();
+        live.activate(DatabaseKind::City, Reader::open_readfile(&std::env::var("MAXMIND_TEST_MMDB_PATH").unwrap()).unwrap()).unwrap();
+        let current_epoch = live.active_build_epoch(DatabaseKind::City);
+        let invalid_target = directory.path().join("occupied-directory");
+        std::fs::create_dir_all(&invalid_target).unwrap();
+        assert!(candidate.install(&invalid_target, DatabaseKind::City, Some(&live)).is_err());
+        assert_eq!(live.active_build_epoch(DatabaseKind::City), current_epoch);
+
         assert!(extract_mmdb(&archive_path, &target, "GeoLite2-City", DatabaseKind::City).is_err());
         assert!(extract_mmdb(&archive_path, &target, "GeoIP2-City", DatabaseKind::Asn).is_err());
     }

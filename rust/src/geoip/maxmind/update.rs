@@ -3,6 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -16,6 +17,7 @@ use tracing::{info, warn};
 use super::{
     download::{self, Credentials, RateLimited, RemoteVersion},
     schedule::DatabaseKind,
+    MaxMindReaders,
 };
 use crate::config::{MaxMindConfig, MaxMindUpdateConfig};
 
@@ -97,6 +99,7 @@ pub struct MaxMindUpdater {
     credentials: Credentials,
     config: MaxMindUpdateConfig,
     client: Client,
+    live_readers: Option<Arc<MaxMindReaders>>,
 }
 
 fn now_unix() -> Result<u64> {
@@ -212,11 +215,41 @@ impl MaxMindUpdater {
             credentials,
             config: config.updates.clone(),
             client: download::create_client()?,
+            live_readers: None,
         })
+    }
+
+    /// Register the same reader slots used by the running HTTP GeoIP service.
+    /// Manual CLI updates omit this handle; the in-process scheduler has one.
+    pub fn with_live_readers(mut self, readers: Arc<MaxMindReaders>) -> Self {
+        self.live_readers = Some(readers);
+        self
     }
 
     pub fn any_missing(&self) -> bool {
         self.targets.iter().any(|target| !target.path.exists())
+    }
+
+    async fn sync_external_install(&self, target: &DatabaseTarget) {
+        let Some(live) = &self.live_readers else { return };
+        let live = live.clone();
+        let path = target.path.clone();
+        let kind = target.kind;
+        // Another instance may have completed --check-updates while this service
+        // is running. Pick up the newer on-disk build at the next scheduler poll,
+        // without taking the HTTP event loop away from requests.
+        match tokio::task::spawn_blocking(move || live.reload_if_changed(kind, &path)).await {
+            Ok(Ok(true)) => {
+                info!(edition = %target.edition, "Externally installed MaxMind database activated without restart");
+            }
+            Ok(Ok(false)) => {}
+            Ok(Err(error)) => {
+                warn!(edition = %target.edition, error = %error, "External MMDB reload failed; retaining active reader");
+            }
+            Err(error) => {
+                warn!(edition = %target.edition, error = %error, "External MMDB reload worker failed");
+            }
+        }
     }
 
     async fn check_edition(
@@ -225,6 +258,7 @@ impl MaxMindUpdater {
         edition_state: &mut EditionState,
         force: bool,
     ) -> Result<UpdateStatus> {
+        self.sync_external_install(target).await;
         let now = now_unix()?;
         let is_retry = edition_state.retry_after_at.is_some();
         if edition_state.retry_after_at.is_some_and(|until| now < until) {
@@ -258,14 +292,16 @@ impl MaxMindUpdater {
             }
         }
 
-        let build_epoch = download::download_and_install(
+        let candidate = download::download_candidate(
             &self.client, &target.edition, target.kind, &target.path, &self.credentials
         ).await?;
+        let build_epoch = candidate.install(&target.path, target.kind, self.live_readers.as_deref())?;
         edition_state.last_modified = remote.last_modified;
         edition_state.etag = remote.etag;
         edition_state.last_updated_at = Some(now_unix()?);
         edition_state.build_epoch = Some(build_epoch);
-        info!(edition = %target.edition, build_epoch, "MaxMind database updated on disk (restart required for refreshed queries until R3B)");
+        info!(edition = %target.edition, build_epoch, live = self.live_readers.is_some(),
+            "MaxMind database installed; active reader switched when running inside the server");
         Ok(UpdateStatus::Updated)
     }
 

@@ -24,6 +24,9 @@ jobs:
           $fixture = Join-Path $env:RUNNER_TEMP "GeoIP2-City-Test.mmdb"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/maxmind/MaxMind-DB/main/test-data/GeoIP2-City-Test.mmdb" -OutFile $fixture
           "MAXMIND_TEST_MMDB_PATH=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $alternate = Join-Path $env:RUNNER_TEMP "GeoLite2-City-Test.mmdb"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/maxmind/MaxMind-DB/main/test-data/GeoLite2-City-Test.mmdb" -OutFile $alternate
+          "MAXMIND_TEST_MMDB_ALTERNATE_PATH=$alternate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Test
         run: cargo test --locked --workspace
       - name: Smoke secured HTTP and MMDB lookups

@@ -1,0 +1,13 @@
+# Rust and generated output
+/target/
+/rust/target/
+/build/
+*.exe
+*.pdb
+
+# Runtime data and secrets
+/data/
+config.toml
+config.local.toml
+.env
+.env.*

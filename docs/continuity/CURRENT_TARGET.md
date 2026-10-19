@@ -19,7 +19,7 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
   no redirects, no credentials, bounded compressed/uncompressed size, staged MMDB parsing
   and edition verification, safe atomic destination persist, source fingerprint.
 - Separate DB-IP monthly updater: persistent state, cross-process lock, current month and
-  previous-month availability fallback, interval/backoff on normal polling, no downgrades,
+  previous-month availability fallback, interval-based normal polling, no downgrades,
   disk bootstrap, staged install and shared ReaderSlot hot activation.
 - DB-IP reads DB-IP-compatible Country/City fields and ASN number/organization,
   with MaxMind first as the preferred provider and DB-IP filling missing fields only.
@@ -31,6 +31,27 @@ Repository: `nusretm/ip_geolocation` · 2026-10-19
 - Separate CLI `--check-dbip-updates` while preserving MaxMind `--check-updates`.
 - Windows/Linux CI, official real DB-IP Lite Country gz/download proof and secured REST lookup;
   actual user Windows smoke before merge.
+
+## R3C verified checkpoint — 2026-10-19
+
+- User's local Windows working tree on R3C feature branch at `4e1e2d0`:
+  `cargo check --locked --workspace` clean, `cargo test --locked --workspace` 24/24 passed.
+- Actual DB-IP HTTPS Lite archives for `city`, `country` and `asn` (2026-10)
+  were downloaded, decompressed, validated and installed with **0 failures**.
+- A second forced check reported all 3 databases `up-to-date` with **0 failures**,
+  proving redundant downloads are avoided.
+- Server started with MaxMind and DB-IP schedulers enabled and all editions were
+  correctly `skipped` within their configured check intervals. Authenticated REST
+  returned complete Turkish geo data with correct UTF-8 `Türkiye` and truthful
+  `sources.location=maxmind`, `sources.asn=maxmind`.
+- CI from the updated branch, run
+  https://github.com/nusretm/ip_geolocation/actions/runs/39298480137:
+  Windows and Ubuntu checks, **24/24 tests**, existing secured REST smoke and real
+  DB-IP Country/ASN Lite HTTP smoke all passed. The strengthened real DB-IP-only
+  request asserted Google `8.8.8.8` ASN 15169 and `sources.asn=dbip`.
+- DB-IP City-only HTTP response is not yet separately verified on user's
+  Windows system; MaxMind's prioritized response does not prove DB-IP City.
+- PR #5 remains **draft**. No merge without user's explicit approval.
 
 ## Deferred / constraints
 

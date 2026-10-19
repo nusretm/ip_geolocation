@@ -102,9 +102,17 @@ failed listener bind must never permanently disable the service.
   `asn.number=15169`, `sources.location=maxmind+dbip`.
 - R4 local Windows Service `service stop` was also verified:
   `Running`, PID `23468` -> `Stopped`, PID none, exit `Win32(0)`.
-- Next gate: R4 cross-platform CI with combined changes and installed
-  Windows Service smoke; then user live R4 branch run after rebuilding the
-  registered executable, followed by user merge approval for PR #6.
+- **Combined R4 + GeoIP integration CI verified** on commit `0e74fab`:
+  Windows and Ubuntu `cargo check --locked --workspace`, **32/32 tests**
+  each, original authenticated REST/MMDB and real DB-IP smoke, and the
+  actual Windows SCM install/start/stop/uninstall with held TCP port and
+  recovery all passed. Push CI:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39316103458
+  ; PR CI:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39316114736
+  . PR #6 is cleanly mergeable and remains **draft**.
+- Next gate: user live R4 branch verification after rebuilding the registered
+  executable, followed by explicit merge approval for PR #6.
   Automatic startup after an actual Windows reboot remains unverified.
 
 ## Risks / constraints

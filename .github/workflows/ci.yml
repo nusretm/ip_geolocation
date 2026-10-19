@@ -143,6 +143,9 @@ jobs:
             if ($null -eq $result -or $result.country_code -ne "US" -or $result.sources.location -ne "dbip") {
               throw "Real DB-IP country lookup failed"
             }
+            if ($null -eq $result.asn -or $result.asn.number -ne 15169 -or $result.sources.asn -ne "dbip") {
+              throw "Real DB-IP ASN lookup failed: $($result | ConvertTo-Json -Depth 8 -Compress)"
+            }
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:19001/v1/geoip?ip=8.8.8.8" -Headers @{ "X-API-Key" = $key }
             if ($response.Headers["X-Data-Attribution"] -notmatch "db-ip.com") { throw "Missing DB-IP attribution" }
             $info = Invoke-RestMethod -Uri "http://127.0.0.1:19001/v1/attribution" -Headers @{ "X-API-Key" = $key }

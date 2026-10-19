@@ -145,7 +145,7 @@ fn extract_mmdb(archive_path: &Path, destination: &Path, edition: &str, kind: Da
     let mut found = false;
 
     for item in archive.entries().context("Cannot read MaxMind tar.gz")? {
-        let mut entry = item.context("Invalid tar archive entry")?;
+        let entry = item.context("Invalid tar archive entry")?;
         let path = entry.path().context("Invalid tar entry path")?.into_owned();
         if !validate_entry_path(&path, edition) {
             continue;

@@ -3,7 +3,7 @@ use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 use anyhow::{Context, Result};
 use axum::{
     extract::{ConnectInfo, Query, Request, State},
-    http::StatusCode,
+    http::{header::CONTENT_TYPE, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -92,12 +92,27 @@ async fn authorize(
     }
 }
 
+// Explicit UTF-8 charset is important for legacy HTTP clients, especially
+// Windows PowerShell 5.1, which may otherwise decode JSON bytes as Latin-1.
+async fn declare_json_utf8(mut response: Response) -> Response {
+    let is_json = response.headers().get(CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes() == b"application/json");
+    if is_json {
+        response.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+    }
+    response
+}
+
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(hello))
         .route("/v1/health", get(hello))
         .route("/v1/geoip", get(lookup_geoip))
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
+        .layer(middleware::map_response(declare_json_utf8))
         .with_state(state)
 }
 
@@ -162,6 +177,20 @@ mod tests {
 
     use crate::{config::Config, geoip::maxmind::schedule::DatabaseKind};
 
+    #[tokio::test]
+    async fn json_responses_declare_utf8_and_preserve_turkish_characters() {
+        let original = Json(json!({"country": "Türkiye"})).into_response();
+        let response = declare_json_utf8(original).await;
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json; charset=utf-8",
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["country"], "Türkiye");
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("Türkiye"));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn authenticated_http_keeps_serving_during_city_swap_and_corrupt_replacement() {
         let (Ok(original), Ok(alternate)) = (
@@ -200,6 +229,10 @@ mod tests {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap();
         let first = client.get(&endpoint).header("X-API-Key", &key).send().await.unwrap();
         assert_eq!(first.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            first.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "application/json; charset=utf-8",
+        );
         let first_body: Value = serde_json::from_str(&first.text().await.unwrap()).unwrap();
         assert_eq!(first_body["country"], "United Kingdom");
 
@@ -248,6 +281,10 @@ mod tests {
         assert!(matches!(last.status(), reqwest::StatusCode::OK | reqwest::StatusCode::NOT_FOUND));
         let unauthorized = client.get(&endpoint).send().await.unwrap();
         assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            unauthorized.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "application/json; charset=utf-8",
+        );
         running.abort();
     }
 }

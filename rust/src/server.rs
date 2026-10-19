@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::{config::Config, geoip::GeoService, security};
+use crate::{config::Config, geoip::{maxmind::update::MaxMindUpdater, GeoService}, security};
 
 #[derive(Clone)]
 struct AppState {
@@ -94,12 +94,31 @@ async fn authorize(
 
 pub async fn serve(config: Config) -> Result<()> {
     let address = config.socket_addr();
+    let updater = if config.providers.maxmind.updates.enabled {
+        Some(MaxMindUpdater::new(&config.providers.maxmind)?)
+    } else {
+        None
+    };
+    // First install missing databases before constructing the memory-backed reader.
+    // Existing databases remain usable if a periodic remote check later fails.
+    if let Some(updater) = &updater {
+        if updater.any_missing() {
+            let result = updater.check_once(true).await?;
+            if result.failures() != 0 {
+                warn!("Some initial MaxMind database downloads failed");
+            }
+        }
+    }
     let geoip = GeoService::load(&config.providers).context("Could not initialize GeoIP provider")?;
     let state = AppState {
         trusted_networks: Arc::new(config.security.trusted_networks()?),
         key_file: config.security.api_keys_file,
         geoip: Arc::new(geoip),
     };
+
+    if let Some(updater) = updater {
+        tokio::spawn(async move { updater.run_scheduler().await });
+    }
 
     if !address.ip().is_loopback() {
         warn!("Non-loopback HTTP binding: require trusted TLS termination and network firewall before production use");

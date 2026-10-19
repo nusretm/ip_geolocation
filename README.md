@@ -64,3 +64,68 @@ cargo test --workspace
 GitHub Actions builds and runs a real secured HTTP smoke test on Windows and Linux. It downloads official synthetic MaxMind test fixtures for verification only.
 
 See `docs/WORKING_RULES.md` and `docs/continuity/CURRENT_TARGET.md`.
+
+## R3A — MaxMind updater (optional)
+
+The R3A updater uses MaxMind's official `HEAD` / `Last-Modified` checks,
+HTTP Basic Auth over HTTPS, and signed-download redirects. Only the documented
+MaxMind download hostname and official MaxMind Cloudflare R2 host are allowed;
+account credentials are never forwarded to Cloudflare.
+
+To enable it, keep your existing `[providers.maxmind]` City/Country/ASN file
+paths in `config.toml`, then add:
+
+```toml
+[providers.maxmind]
+city = "data/databases/GeoLite2-City.mmdb"
+country = "data/databases/GeoLite2-Country.mmdb"
+asn = "data/databases/GeoLite2-ASN.mmdb"
+# If needed: account_id = 123456; license_key = "secret"
+# Alternatively use account_id_env / license_key_env or the defaults below.
+
+[providers.maxmind.updates]
+enabled = true
+check_on_start = true
+poll_minutes = 60
+release_check_hours = 4
+other_check_hours = 24
+state_file = "data/updates/maxmind.json"
+```
+
+Do **not** duplicate `[providers.maxmind]` if it already exists: add the
+options to your existing section. Set your MaxMind Account ID and License Key
+via `MAXMIND_ACCOUNT_ID` and `MAXMIND_LICENSE_KEY` environment variables,
+or place them in the ignored local `config.toml`. Both string and numeric
+account IDs are accepted. Never commit credentials or print them in logs.
+
+Check/download immediately, bypassing schedule but still honoring
+`Last-Modified`/ETag and provider rate-limit backoff:
+
+```powershell
+cargo run -- --check-updates
+```
+
+The CLI reports per-edition updated/up-to-date/skipped/failed results and
+exits nonzero for failures. A local file missing at server startup triggers an
+initial download if updating is enabled; an invalid or unavailable configured
+database still prevents startup as before.
+
+The scheduler wakes hourly by default. GeoLite2 City/Country release days
+are Tuesday/Friday (UTC); GeoLite2 ASN releases on weekdays, as do paid
+GeoIP2 City/Country editions. It checks less often on non-release days and
+also catches off-schedule releases. A 429 rate limit honors `Retry-After`.
+The state file is durable across restarts; a cross-process file lock prevents
+competing update processes.
+
+New files are downloaded into temporary files, tar.gz contents are validated,
+and only a matching MMDB record is written to the configured destination.
+Existing files remain in place when download or validation fails.
+
+**R3A limitation:** the running API reader remains bound to the previously
+loaded in-memory MMDB after an update. Restart `remvibe-geolocation` to use
+new downloaded data. **R3B** will implement live database reload with no
+interruption to lookups. This checkpoint does not implement DB-IP or the
+Windows Service Control Manager.
+
+MaxMind documents direct database download behavior and limits at
+https://dev.maxmind.com/geoip/updating-databases/.

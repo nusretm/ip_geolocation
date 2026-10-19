@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::{Context, Result};
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,

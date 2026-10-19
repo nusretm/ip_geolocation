@@ -221,6 +221,25 @@ impl Config {
             resolve_path(path, base_dir);
         }
 
+        // Providers must not write into one another's MMDB destinations.
+        // A shared updater state path would also corrupt release tracking.
+        let mut known_paths = std::collections::HashSet::new();
+        for path in [
+            &config.providers.maxmind.city,
+            &config.providers.maxmind.country,
+            &config.providers.maxmind.asn,
+            &config.providers.dbip.city,
+            &config.providers.dbip.country,
+            &config.providers.dbip.asn,
+        ].into_iter().flatten() {
+            if !known_paths.insert(path) {
+                bail!("Configured provider MMDB paths must be unique");
+            }
+        }
+        if config.providers.maxmind.updates.state_file == config.providers.dbip.updates.state_file {
+            bail!("MaxMind and DB-IP update state files must be different");
+        }
+
         if config.server.port == 0 {
             bail!("Server port must not be zero");
         }

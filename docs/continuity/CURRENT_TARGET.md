@@ -56,10 +56,20 @@ IP and a valid API key for each REST request. The intended rule is **OR**:
   https://github.com/nusretm/ip_geolocation/actions/runs/39333728847 .
   The earlier R5 CI run on `97086c4` independently passed both OS:
   https://github.com/nusretm/ip_geolocation/actions/runs/39333500225 .
-- **Pending:** user local running Windows Service smoke after a controlled
-  binary update and restart; explicit user approval **before merge**.
-  A service already running an earlier binary does not pick up this
-  change until its binary is rebuilt and restarted.
+- **Cloud server deployment confirmed by user (2026-10-20):**
+  built R5 with `cargo build --release`, installed the release binary
+  as a Windows Service on their cloud server and reported that it works
+  in live use. The user did not supply individual HTTP responses or
+  logs for each authorization branch; those specific cases are covered
+  by the integration tests and CI, not claimed as independently observed
+  in this cloud deployment.
+- Latest pre-deployment PR head `4c5c8dc` had **successful** Windows
+  and Ubuntu CI for push and PR, including native SCM and keyless trusted
+  API smoke:
+  https://github.com/nusretm/ip_geolocation/actions/runs/39334061515
+  and https://github.com/nusretm/ip_geolocation/actions/runs/39334055149 .
+- **Pending:** explicit user approval before PR #8 merge. R5 is deployed
+  independently on the cloud server but `main` is unchanged.
 
 ---
 

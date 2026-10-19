@@ -16,6 +16,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+      # R4 bootstrap only: resolve the new Windows-only crate, print the exact
+      # delta, then commit Cargo.lock and remove these two temporary steps.
+      - name: Resolve R4 Cargo.lock (temporary)
+        run: cargo fetch
+      - name: Show R4 Cargo.lock diff (temporary)
+        run: git --no-pager diff -- Cargo.lock
       - name: Check
         run: cargo check --locked --workspace
       - name: Fetch synthetic MMDB fixture for updater tests

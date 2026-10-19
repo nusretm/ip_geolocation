@@ -55,6 +55,7 @@ impl ReaderSlot {
             });
     }
 
+    #[cfg(test)]
     pub fn build_epoch(&self) -> Option<u64> {
         self.snapshot().map(|reader| reader.metadata.build_epoch)
     }

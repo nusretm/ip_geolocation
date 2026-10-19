@@ -115,6 +115,32 @@ failed listener bind must never permanently disable the service.
   executable, followed by explicit merge approval for PR #6.
   Automatic startup after an actual Windows reboot remains unverified.
 
+## User local R4 port conflict and observability fix — 2026-10-19
+
+- User `cargo check --locked --workspace` and `cargo test --locked --workspace`
+  on the updated combined R4 branch passed, **32/32 tests**; build succeeded.
+- A local `service start` returned `StartPending` then `Stopped`,
+  `Win32(1)`. Authenticated HTTP on `127.0.0.1:19000` still returned
+  correct Mountain View/California data, while Windows Service logs
+  showed `os error 10048` (**address already in use**) with retry delays
+  1, 2, 4, 8, 16, 30 seconds. This demonstrates a different process
+  owned the port; likely the user's still-running GeoIP fix worktree
+  console process. The successful HTTP response **does not** demonstrate
+  that the service was serving requests.
+- The SCM recovery loop reattempted startup, as evidenced by fresh log
+  initialization after a failed startup. This situation is a genuine
+  port-ownership conflict, **not** evidence that Windows TCP or the NIC
+  failed to initialize. Inspect the actual `Get-NetTCPConnection` PID
+  and process command line; stop only the confirmed competing console
+  process. Service then needs to reach `Running` with authenticated HTTP.
+- Previously, R4 reported generic `channel closed` when the HTTP
+  readiness sender was dropped after a fatal startup failure. The
+  follow-up fix in `windows_service/runtime.rs` awaits the server task
+  and propagates the **underlying bind error** into SCM logs, avoiding a
+  misleading error; early intentional Stop remains clean.
+- Local clean-window restart and reboot-startup smoke are still pending.
+  No merge of R4 PR #6 without explicit user approval.
+
 ## Risks / constraints
 
 - A configured `127.0.0.1` listener usually does not need an external NIC or

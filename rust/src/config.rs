@@ -64,12 +64,78 @@ pub struct GeoConfig {
     pub maxmind: MaxMindConfig,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum MaxMindAccountId {
+    String(String),
+    Number(u64),
+}
+
+impl MaxMindAccountId {
+    pub fn as_string(&self) -> String {
+        match self {
+            Self::String(value) => value.clone(),
+            Self::Number(value) => value.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct MaxMindConfig {
     pub city: Option<PathBuf>,
     pub country: Option<PathBuf>,
     pub asn: Option<PathBuf>,
+    pub city_edition: String,
+    pub country_edition: String,
+    pub asn_edition: String,
+    pub account_id: Option<MaxMindAccountId>,
+    pub license_key: Option<String>,
+    pub account_id_env: String,
+    pub license_key_env: String,
+    pub updates: MaxMindUpdateConfig,
+}
+
+impl Default for MaxMindConfig {
+    fn default() -> Self {
+        Self {
+            city: None,
+            country: None,
+            asn: None,
+            city_edition: "GeoLite2-City".into(),
+            country_edition: "GeoLite2-Country".into(),
+            asn_edition: "GeoLite2-ASN".into(),
+            account_id: None,
+            license_key: None,
+            account_id_env: "MAXMIND_ACCOUNT_ID".into(),
+            license_key_env: "MAXMIND_LICENSE_KEY".into(),
+            updates: MaxMindUpdateConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct MaxMindUpdateConfig {
+    pub enabled: bool,
+    pub check_on_start: bool,
+    pub poll_minutes: u64,
+    pub release_check_hours: u64,
+    pub other_check_hours: u64,
+    pub state_file: PathBuf,
+}
+
+impl Default for MaxMindUpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            check_on_start: true,
+            poll_minutes: 60,
+            release_check_hours: 4,
+            other_check_hours: 24,
+            state_file: PathBuf::from("data/updates/maxmind.json"),
+        }
+    }
 }
 
 fn resolve_path(path: &mut PathBuf, base: &Path) {
@@ -98,6 +164,11 @@ impl Config {
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         resolve_path(&mut config.security.api_keys_file, base_dir);
+        resolve_path(&mut config.providers.maxmind.updates.state_file, base_dir);
+        let update_settings = &config.providers.maxmind.updates;
+        if update_settings.poll_minutes == 0 || update_settings.release_check_hours == 0 || update_settings.other_check_hours == 0 {
+            bail!("MaxMind update intervals must be greater than zero");
+        }
         for path in [
             &mut config.providers.maxmind.city,
             &mut config.providers.maxmind.country,

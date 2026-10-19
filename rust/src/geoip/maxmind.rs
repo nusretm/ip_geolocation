@@ -7,8 +7,9 @@ use std::{net::IpAddr, path::Path, sync::Arc};
 use anyhow::{bail, Context, Result};
 use maxminddb::Reader;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-use super::{reader_slot::ReaderSlot, AsnInfo, GeoLocation, GeoProviderAbs};
+use super::{reader_slot::{DatabaseFingerprint, ReaderSlot}, AsnInfo, GeoLocation, GeoProviderAbs};
 use schedule::DatabaseKind;
 use crate::config::MaxMindConfig;
 
@@ -31,11 +32,11 @@ impl MaxMindReaders {
         }
     }
 
-    pub fn activate(&self, kind: DatabaseKind, reader: Reader<Vec<u8>>) -> Result<()> {
+    pub fn activate(&self, kind: DatabaseKind, reader: Reader<Vec<u8>>, fingerprint: DatabaseFingerprint) -> Result<()> {
         if !reader.metadata.database_type.contains(kind.expected_type()) {
             bail!("Refusing to activate an MMDB with the wrong database type");
         }
-        self.slot(kind).activate(reader);
+        self.slot(kind).activate(reader, fingerprint);
         Ok(())
     }
 
@@ -43,19 +44,23 @@ impl MaxMindReaders {
         self.slot(kind).build_epoch()
     }
 
+    pub fn active_fingerprint(&self, kind: DatabaseKind) -> Option<DatabaseFingerprint> {
+        self.slot(kind).fingerprint()
+    }
+
     pub fn reload_if_changed(&self, kind: DatabaseKind, path: &Path) -> Result<bool> {
         if !path.exists() {
             return Ok(false);
         }
-        let reader = open_database(path, kind.expected_type())?;
-        let epoch = reader.metadata.build_epoch;
-        if epoch == 0 {
+        let (reader, fingerprint) = open_database(path, kind.expected_type())?;
+        if reader.metadata.build_epoch == 0 {
             bail!("Refusing to reload an MMDB without a valid build epoch");
         }
-        if self.slot(kind).build_epoch() == Some(epoch) {
+        // Two distinct MMDB builds can share the same build_epoch.
+        if self.slot(kind).fingerprint() == Some(fingerprint) {
             return Ok(false);
         }
-        self.activate(kind, reader)?;
+        self.activate(kind, reader, fingerprint)?;
         Ok(true)
     }
 
@@ -68,14 +73,23 @@ pub struct MaxMindProvider {
     readers: Arc<MaxMindReaders>,
 }
 
-fn open_database(path: &Path, edition: &str) -> Result<Reader<Vec<u8>>> {
-    let reader = Reader::open_readfile(path)
-        .with_context(|| format!("Unable to read {edition} MMDB: {}", path.display()))?;
-    let database_type = &reader.metadata.database_type;
-    if !database_type.contains(edition) {
-        bail!("Expected {edition} database at {}, found {database_type}", path.display());
+pub(crate) fn database_from_bytes(bytes: Vec<u8>, edition: &str) -> Result<(Reader<Vec<u8>>, DatabaseFingerprint)> {
+    let fingerprint: DatabaseFingerprint = Sha256::digest(&bytes).into();
+    let reader = Reader::from_source(bytes)
+        .with_context(|| format!("Cannot parse {edition} MaxMind MMDB"))?;
+    if !reader.metadata.database_type.contains(edition) {
+        bail!("Expected a {edition} database, got {}", reader.metadata.database_type);
     }
-    Ok(reader)
+    if reader.metadata.build_epoch == 0 {
+        bail!("Refusing an MMDB without a valid build epoch");
+    }
+    Ok((reader, fingerprint))
+}
+
+fn open_database(path: &Path, edition: &str) -> Result<(Reader<Vec<u8>>, DatabaseFingerprint)> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("Unable to read {edition} MMDB: {}", path.display()))?;
+    database_from_bytes(bytes, edition)
 }
 
 impl MaxMindProvider {

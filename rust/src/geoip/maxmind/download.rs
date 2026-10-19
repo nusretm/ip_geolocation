@@ -249,6 +249,37 @@ mod tests {
     }
 
     #[test]
+    fn extracts_a_real_synthetic_mmdb_fixture_from_tar_gz() {
+        let Ok(fixture) = std::env::var("MAXMIND_TEST_MMDB_PATH") else {
+            // Developers without the optional external test fixture can run the core tests.
+            return;
+        };
+        let fixture_bytes = std::fs::read(fixture).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("fixture.tar.gz");
+        let archive_file = File::create(&archive_path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(archive_file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(fixture_bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(
+            &mut header,
+            "GeoIP2-City_20261019/GeoIP2-City.mmdb",
+            fixture_bytes.as_slice(),
+        ).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let target = directory.path().join("City.mmdb");
+        let (temp, epoch) = extract_mmdb(&archive_path, &target, "GeoIP2-City", DatabaseKind::City).unwrap();
+        assert!(epoch > 0);
+        assert!(temp.path().metadata().unwrap().len() > 0);
+        assert!(extract_mmdb(&archive_path, &target, "GeoLite2-City", DatabaseKind::City).is_err());
+        assert!(extract_mmdb(&archive_path, &target, "GeoIP2-City", DatabaseKind::Asn).is_err());
+    }
+
+    #[test]
     fn archive_paths_must_be_edition_directory_and_filename() {
         assert!(validate_entry_path(Path::new("GeoLite2-City_20261019/GeoLite2-City.mmdb"), "GeoLite2-City"));
         assert!(!validate_entry_path(Path::new("../GeoLite2-City.mmdb"), "GeoLite2-City"));

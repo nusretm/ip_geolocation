@@ -17,20 +17,19 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: Check
-        run: cargo check --workspace
-      - name: Test
-        run: cargo test --workspace
-      - name: Generate reproducible Cargo.lock for R3A (temporary)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
+        run: cargo check --locked --workspace
+      - name: Fetch synthetic MMDB fixture for updater tests
+        shell: pwsh
         run: |
-          echo 'BEGIN_R3A_CARGO_LOCK'
-          cat Cargo.lock
-          echo 'END_R3A_CARGO_LOCK'
+          $fixture = Join-Path $env:RUNNER_TEMP "GeoIP2-City-Test.mmdb"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/maxmind/MaxMind-DB/main/test-data/GeoIP2-City-Test.mmdb" -OutFile $fixture
+          "MAXMIND_TEST_MMDB_PATH=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Test
+        run: cargo test --locked --workspace
       - name: Smoke secured HTTP and MMDB lookups
         shell: pwsh
         run: |
-          cargo build --workspace
+          cargo build --locked --workspace
           $exe = if ($IsWindows) { "./target/debug/remvibe-geolocation.exe" } else { "./target/debug/remvibe-geolocation" }
           $work = Join-Path $env:RUNNER_TEMP "remvibe-geo-smoke"
           $db = Join-Path $work "databases"

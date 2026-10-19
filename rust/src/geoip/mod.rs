@@ -78,20 +78,22 @@ impl GeoLocation {
             };
         }
 
-        match (&mut self.asn, next.asn) {
-            (existing @ None, Some(incoming)) => {
-                *existing = Some(incoming);
-                self.sources.asn = next.sources.asn;
-            }
-            (Some(existing), Some(incoming)) if existing.number.is_some() && existing.number == incoming.number => {
-                if existing.organization.is_none() && incoming.organization.is_some() {
-                    existing.organization = incoming.organization;
-                    if self.sources.asn == Some("maxmind") && next.sources.asn == Some("dbip") {
-                        self.sources.asn = Some("maxmind+dbip");
+        if let Some(incoming) = next.asn {
+            match self.asn.as_mut() {
+                None => {
+                    self.asn = Some(incoming);
+                    self.sources.asn = next.sources.asn;
+                }
+                Some(existing) if existing.number.is_some() && existing.number == incoming.number => {
+                    if existing.organization.is_none() && incoming.organization.is_some() {
+                        existing.organization = incoming.organization;
+                        if self.sources.asn == Some("maxmind") && next.sources.asn == Some("dbip") {
+                            self.sources.asn = Some("maxmind+dbip");
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 

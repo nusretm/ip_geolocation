@@ -4,34 +4,36 @@ Repository: `nusretm/ip_geolocation`
 
 Date: 2026-10-19
 
-## Current branches
+## Checkpoint progress
 
-- R1: `feature/rest-api-security-foundation`, PR #1, not merged without user approval.
-- R2: `feature/maxmind-mmdb-named-api-keys`, created from R1 branch; PR targets R1 until R1 is approved/merged.
+- R1: PR #1 merged to `main` as `408b346` (trusted IP + API key authenticated Axum REST API).
+- R2: PR #2 now targets `main`. R2 retains the existing working R1 implementation.
+- Tested: Windows and Linux GitHub Actions compile/unit tests plus real secured HTTP + MaxMind synthetic MMDB lookups; local Windows City MMDB lookup and named key creation/list verified by user.
 
-## Approved scope
+## R2 scope
 
-Implement the next MMDB checkpoint together with app-specific API key administration:
+- Rust MaxMind MMDB reader for configured local City, Country and ASN paths.
+- `GET /v1/geoip?ip=...` accepts valid IPv4/IPv6; invalid address => 400 `invalid_ip`, valid but unknown => 404 `ip_not_found`, no configured database => 503 `database_unavailable`.
+- Application-named API keys via `--api-key --api-key-name "MTN Launcher"`, plus `--api-key-list` with key IDs and UNIX timestamps.
+- Preserve `--new-api-key` and `--delete-api-key <API_KEY>` CLI behavior.
+- Transparent v1 key store read and v2 migration on write. Previously issued keys remain valid.
+- Preserve trusted TCP-peer IP and API key authorization on all HTTP endpoints.
 
-- Rust maxminddb reader for configurable local City, Country and ASN files; no download yet.
-- `GET /v1/geoip?ip=...` with IPv4 and IPv6 parsing and common JSON result model.
-- Keep `GET /` and `GET /v1/health` and mandatory trusted IP/API key middleware.
-- `--api-key --api-key-name "MTN Launcher"` creates a named key, with `--new-api-key` preserved as an alias.
-- `--api-key-list` lists application names, key identifiers and created-at Unix timestamps, never raw keys.
-- `--delete-api-key <API_KEY>` revokes the key.
-- Transparent v1 key store read and migration to v2 on write. Legacy keys remain valid.
+## Operational notes
+
+- `[providers.maxmind]` belongs in `config.toml`, **not** the Cargo workspace `Cargo.toml`. The workspace manifest contains only the `[workspace]` section and Cargo settings.
+- Databases are loaded on startup; updating the TOML while the process is running does not reload them.
+- No MMDB files are committed. Obtain authorized data from a provider. Official test fixtures contain synthetic values, not production geographic accuracy.
+- Application keys are stored only as hashes, and the key list never prints secrets.
 
 ## Design boundaries
 
-- Provider-specific MMDB code in `geoip/maxmind.rs`. Other providers must not be embedded in MaxMind conditionals.
-- Common `GeoProviderAbs` interface and `GeoService` registry prepared for new providers.
-- No provider update scheduling, download/authentication, or external distribution until their checkpoint.
-- Databases are loaded on startup and queried offline. Missing configured files fail startup.
-- Windows Service/SCM and production HTTPS are deferred. Console HTTP binds localhost by default.
-- API keys persist in `data/api_keys.json` with SHA-256 hashes. Runtime writes update the server on the next request.
+- MMDB-related logic stays in `geoip/maxmind.rs`, not inside generic server middleware.
+- GeoProviderAbs and GeoService isolate the provider interfaces for new sources.
+- No downloads or update schedule yet; next R3 checkpoint adds independent provider update logic and safe atomic database replacement.
+- Windows SCM service and production TLS/firewall setup remain deferred.
+- Private operator-only service, no tenant/user/RBAC/admin web UI.
 
-## Evidence / closing tasks
+## Next checkpoint
 
-- Cargo check + focused tests and actual HTTP response with official MaxMind test MMDB on Windows and Linux CI.
-- User local Windows testing for first-hand evidence.
-- Merge only after explicit user approval.
+R3: MaxMind/DB-IP provider-managed download/update schedule, conditional HEAD/Last-Modified/ETag checks where supported, safe database file replacement and reload. Requires separate approval for implementation.
